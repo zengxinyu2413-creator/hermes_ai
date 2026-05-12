@@ -1,4 +1,90 @@
-venv/
-.DS_Store
+# === Python ===
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+*.egg
+
+# === Virtual Environments ===
+venv/
+.venv/
+env/
+ENV/
+
+# === Environment & Secrets (CRITICAL) ===
 .env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# === Jupyter ===
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# === Data files (large, use DVC or external storage) ===
+data/raw/**/*.csv
+data/raw/**/*.parquet
+data/raw/**/*.feather
+data/processed/**/*.parquet
+data/features/**/*.parquet
+# Keep .gitkeep
+!data/**/.gitkeep
+# Exception: keep v5 historical data
+!data/SOLUSDT_2024_1h.csv
+
+# === Models ===
+models/**/*.pkl
+models/**/*.joblib
+models/**/*.h5
+models/**/*.onnx
+!models/**/.gitkeep
+
+# === Logs ===
+logs/**/*.log
+logs/**/*.log.*
+!logs/.gitkeep
+
+# === Testing & Coverage ===
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# === MyPy & Linters ===
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# === Local databases ===
+*.sqlite3
+*.db
+
+# === Backtest results (large) ===
+backtest_results/*.parquet
+backtest_results/*.pkl
+
+# === System ===
+Thumbs.db
+desktop.ini

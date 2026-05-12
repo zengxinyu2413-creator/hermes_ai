@@ -1,0 +1,113 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-ai"
+version = "0.6.0"
+description = "Institutional-grade SOL quantitative trading system"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Xinyu", email = "zengxinyu2413@gmail.com"}
+]
+classifiers = [
+    "Private :: Do not Upload",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+]
+
+# === 核心运行时依赖(锁定版本,生产稳定) ===
+dependencies = [
+    # 交易引擎
+    "nautilus-trader==1.226.0",
+    # Binance REST 辅助 + 历史回填
+    "ccxt>=4.5.0,<5.0",
+    # 数据 & 数值
+    "numpy>=2.0,<3.0",
+    "pandas>=2.2,<3.0",
+    "pyarrow>=18.0,<19.0",
+    "polars>=1.20,<2.0",
+    # 数据库
+    "psycopg[binary]>=3.2,<4.0",         # PostgreSQL/TimescaleDB
+    "redis[hiredis]>=5.2,<6.0",          # Redis
+    "sqlalchemy>=2.0,<3.0",              # ORM (可选)
+    # 机器学习
+    "scikit-learn>=1.5,<2.0",
+    "hmmlearn>=0.3.2,<0.4",              # HMM 市场状态
+    "lightgbm>=4.5,<5.0",                # 梯度提升
+    # 配置 & 序列化
+    "pydantic>=2.9,<3.0",
+    "pydantic-settings>=2.7,<3.0",
+    "pyyaml>=6.0,<7.0",
+    "python-dotenv>=1.0,<2.0",
+    "msgspec>=0.18,<1.0",
+    # 日志 & 监控
+    "structlog>=24.4,<25.0",
+    "rich>=13.9,<14.0",
+    "prometheus-client>=0.21,<1.0",
+    # 异步 & 网络
+    "uvloop>=0.21,<1.0",
+    "httpx>=0.28,<1.0",
+    "websockets>=14.0,<15.0",
+    "aiohttp>=3.11,<4.0",
+    # 工具
+    "click>=8.1,<9.0",
+    "tqdm>=4.67,<5.0",
+    "tenacity>=9.0,<10.0",
+    "pytz>=2024.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9.0",
+    "pytest-asyncio>=0.24,<1.0",
+    "pytest-cov>=6.0,<7.0",
+    "pytest-mock>=3.14,<4.0",
+    "ruff>=0.8,<1.0",
+    "mypy>=1.13,<2.0",
+    "ipython>=8.30,<9.0",
+    "ipdb>=0.13",
+]
+
+notebook = [
+    "jupyter>=1.1,<2.0",
+    "jupyterlab>=4.3,<5.0",
+    "matplotlib>=3.9,<4.0",
+    "plotly>=5.24,<6.0",
+    "seaborn>=0.13,<1.0",
+]
+
+monitor = [
+    "python-telegram-bot>=21.9,<22.0",
+]
+
+[project.scripts]
+hermes = "hermes.cli:main"
+
+# === 工具配置 ===
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+indent-width = 4
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+ignore_missing_imports = true
+files = ["src/hermes"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
