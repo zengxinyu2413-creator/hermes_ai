@@ -88,3 +88,4 @@ backtest_results/*.pkl
 # === System ===
 Thumbs.db
 desktop.ini
+_tmp_*.py
