@@ -428,7 +428,6 @@ class BinanceRestClient:
         try:
             body = response.json()
         except Exception:  # ValueError, JSONDecodeError, etc.
-            response.raise_for_status()
             # If we got here with a 2xx but non-JSON body, surface as API error.
             raise BinanceAPIError(
                 code=-1,
