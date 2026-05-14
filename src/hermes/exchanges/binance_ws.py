@@ -453,7 +453,7 @@ class BinanceWsClient:
         # Queue is bound to the current event loop here, not at construction.
         self._queue = asyncio.Queue(maxsize=self._queue_max_size)
         self._main_task = asyncio.create_task(
-            self._run_one(), name=f"binance_ws_run[{self._env.value}]"
+            self._run_with_reconnect(), name=f"binance_ws_run[{self._env.value}]"
         )
         _logger.info(
             "ws_client_entered",
@@ -479,6 +479,54 @@ class BinanceWsClient:
                     error_type=type(cleanup_exc).__name__,
                 )
         _logger.info("ws_client_exited", env=self._env.value)
+
+    async def _run_with_reconnect(self) -> None:
+        """Supervise WebSocket lifecycle with auto-reconnect.
+
+        Wraps _run_one in an infinite reconnect loop with exponential
+        backoff and jitter. Never gives up on errors (suits 24/7 quant
+        operations); the only way out is .close() triggering a
+        CancelledError.
+
+        Each connection is also capped at 23h to proactively reconnect
+        before Binance's 24h server-side limit kicks in.
+        """
+        attempt = 0
+        while True:
+            try:
+                await asyncio.wait_for(
+                    self._run_one(),
+                    timeout=_MAX_CONNECTION_SECONDS,
+                )
+                # _run_one returned cleanly: server closed connection.
+                # Reset attempt and reconnect immediately.
+                _logger.info("ws_connection_closed_by_server")
+                attempt = 0
+            except asyncio.TimeoutError:
+                # 23h cap hit: proactive reconnect. Not a failure.
+                _logger.info("ws_proactive_reconnect_23h")
+                attempt = 0
+            except asyncio.CancelledError:
+                # User .close() triggered cancellation. Exit cleanly.
+                raise
+            except Exception:
+                # Any other error (ConnectionClosed, OSError, ...):
+                # log with traceback and back off before retrying.
+                _logger.warning(
+                    "ws_connection_error",
+                    attempt=attempt + 1,
+                    exc_info=True,
+                )
+                attempt += 1
+
+            if attempt > 0:
+                delay = self._compute_backoff_delay(attempt)
+                _logger.info(
+                    "ws_reconnect_scheduled",
+                    attempt=attempt,
+                    delay_seconds=round(delay, 2),
+                )
+                await asyncio.sleep(delay)
 
     async def _run_one(self) -> None:
         """Single-connection read loop.
