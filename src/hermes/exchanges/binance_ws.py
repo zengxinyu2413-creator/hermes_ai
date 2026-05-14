@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import websockets
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -377,38 +378,159 @@ class BinanceWsClient:
             )
 
     # ------------------------------------------------------------------ #
-    # Async lifecycle (skeleton — wired in Step 2.D.4)                   #
+    # Async lifecycle (Phase 2.D.4b - single-connection, no reconnect)   #
     # ------------------------------------------------------------------ #
+    #
+    # Reconnect logic lands in Step 2.D.5. For now, a single underlying
+    # websockets.connect() is opened on __aenter__; if it terminates
+    # (cleanly or with an error), the read loop ends and stream() drains
+    # whatever is left in the queue before returning.
 
-    async def __aenter__(self) -> BinanceWsClient:
+    async def __aenter__(self) -> "BinanceWsClient":
         if self._closed:
             raise RuntimeError(
                 "BinanceWsClient cannot be reused after close; "
                 "construct a new instance"
             )
-        # Step 2.D.4 will: create self._queue, start read-loop task,
-        # await first successful connection.
-        raise NotImplementedError(
-            "BinanceWsClient connection logic lands in Step 2.D.4"
+        if self._main_task is not None:
+            raise RuntimeError(
+                "BinanceWsClient is already entered; nesting is not supported"
+            )
+        # Queue is bound to the current event loop here, not at construction.
+        self._queue = asyncio.Queue(maxsize=self._queue_max_size)
+        self._main_task = asyncio.create_task(
+            self._run(), name=f"binance_ws_run[{self._env.value}]"
         )
+        _logger.info(
+            "ws_client_entered",
+            env=self._env.value,
+            streams=len(self._streams),
+        )
+        return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        # Step 2.D.4 will: cancel self._main_task, close websocket,
-        # drain queue, set self._closed = True.
-        raise NotImplementedError(
-            "BinanceWsClient shutdown logic lands in Step 2.D.4"
-        )
+        self._closed = True
+        if self._main_task is not None and not self._main_task.done():
+            self._main_task.cancel()
+            try:
+                await self._main_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as cleanup_exc:  # noqa: BLE001 - log and swallow
+                # We are in the exit path; surfacing this would mask the
+                # original exception (if any). Log and move on.
+                _logger.warning(
+                    "ws_cleanup_error",
+                    error=str(cleanup_exc),
+                    error_type=type(cleanup_exc).__name__,
+                )
+        _logger.info("ws_client_exited", env=self._env.value)
+
+    async def _run(self) -> None:
+        """Single-connection read loop.
+
+        Connects once, iterates frames, parses each into a StreamMessage,
+        and pushes to the queue. Terminates on:
+          * clean server close (StopAsyncIteration from the iterator)
+          * any websockets exception (logged, then we return)
+          * external task.cancel() (propagates as CancelledError - re-raised)
+
+        ``_parse_message`` is guaranteed not to raise, so a single outer
+        try/except is sufficient. The queue is bounded; ``await put`` blocks
+        if the consumer falls behind, applying backpressure to the socket.
+        """
+        assert self._queue is not None  # set in __aenter__
+        try:
+            async with websockets.connect(self.url) as ws:
+                _logger.info("ws_connected", url=self.url)
+                async for raw in ws:
+                    # raw can be str or bytes depending on the frame type.
+                    # Binance always sends text JSON for market-data streams,
+                    # but be defensive in case of unexpected binary frames.
+                    if isinstance(raw, bytes):
+                        try:
+                            raw = raw.decode("utf-8")
+                        except UnicodeDecodeError:
+                            _logger.warning("ws_binary_frame_skipped")
+                            continue
+                    msg = self._parse_message(raw)
+                    await self._queue.put(msg)
+        except asyncio.CancelledError:
+            _logger.info("ws_run_cancelled")
+            raise
+        except Exception as exc:  # noqa: BLE001 - boundary swallow
+            # Anything else (connection refused, ConnectionClosedError, etc.)
+            # ends this run. Reconnect is Phase 2.D.5; for 2.D.4b we simply
+            # return so stream() can drain and finish.
+            _logger.warning(
+                "ws_run_terminated",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     async def stream(self):
         """Async-iterate over :class:`StreamMessage` envelopes.
 
-        Wired in Step 2.D.4. The shape will be::
+        Usage::
 
             async with BinanceWsClient([...]) as ws:
                 async for msg in ws.stream():
                     if msg.kind is StreamKind.KLINE:
                         ...
+
+        Behaviour when the underlying connection ends:
+
+        1. The read loop task finishes (cleanly or with logged error).
+        2. ``stream()`` drains any messages still in the queue.
+        3. After the queue is empty, ``stream()`` returns (the async-for
+           in the consumer exits cleanly without raising).
+
+        This guarantees zero message loss at the boundary between
+        connection-end and consumer-exit: messages successfully parsed
+        and queued before disconnection are always delivered.
         """
-        raise NotImplementedError(
-            "BinanceWsClient.stream lands in Step 2.D.4"
-        )
+        if self._queue is None or self._main_task is None:
+            raise RuntimeError(
+                "stream() can only be called inside `async with`"
+            )
+
+        queue = self._queue
+        task = self._main_task
+
+        while True:
+            # If the read-loop task is still running, race a queue.get()
+            # against task completion so we wake up either on a new message
+            # or when the connection ends.
+            if not task.done():
+                get_task = asyncio.create_task(queue.get())
+                try:
+                    done, _pending = await asyncio.wait(
+                        {get_task, task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.CancelledError:
+                    # Consumer was cancelled; tidy up our helper task.
+                    get_task.cancel()
+                    raise
+
+                if get_task in done:
+                    yield get_task.result()
+                    continue
+
+                # The read loop finished while we were waiting. Don't lose
+                # the get_task - its future may already have a value pulled
+                # from the queue (race window). If it does, yield it.
+                if get_task.done() and not get_task.cancelled():
+                    try:
+                        yield get_task.result()
+                    except BaseException:  # noqa: BLE001 - defensive
+                        pass
+                else:
+                    get_task.cancel()
+                # Fall through to drain.
+
+            # Read loop is done. Drain anything remaining in the queue
+            # without blocking, then return.
+            while not queue.empty():
+                yield queue.get_nowait()
+            return

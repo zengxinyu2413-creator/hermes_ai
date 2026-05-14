@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -167,19 +168,6 @@ class TestLifecycleSkeleton:
         assert "mainnet" in r
         assert "streams=2" in r
         assert "running=False" in r
-
-    @pytest.mark.asyncio
-    async def test_aenter_raises_not_implemented(self) -> None:
-        # Step 2.D.4 will replace this with a real connection.
-        ws = BinanceWsClient(["solusdt@kline_1m"])
-        with pytest.raises(NotImplementedError, match="Step 2.D.4"):
-            await ws.__aenter__()
-
-    @pytest.mark.asyncio
-    async def test_stream_raises_not_implemented(self) -> None:
-        ws = BinanceWsClient(["solusdt@kline_1m"])
-        with pytest.raises(NotImplementedError, match="Step 2.D.4"):
-            await ws.stream()
 
 # ====================================================================== #
 # Phase 2.D.4a — Stream classification                                   #
@@ -415,3 +403,342 @@ class TestParseMessageInvariants:
         from hermes.exchanges.binance_contracts import StreamKind
         msg = BinanceWsClient._parse_message(raw)
         assert msg.kind is StreamKind.UNKNOWN
+
+
+# ====================================================================== #
+# Phase 2.D.4b-i — Mock WebSocket infrastructure                          #
+# ====================================================================== #
+#
+# `websockets` doesn't ship a MockTransport equivalent like httpx, so we
+# build our own. The real WebSocketClientProtocol is simultaneously:
+#   - an async context manager  (`async with websockets.connect(url) as ws`)
+#   - an async iterator         (`async for raw in ws: ...`)
+#   - an object with recv/send/close methods
+#
+# MockWebSocketConnection covers all three surfaces. Tests provide a list
+# of frames the mock will deliver in order, optionally followed by an
+# exception to simulate disconnection.
+#
+# `_mock_connect_factory` is the async-context-manager that monkeypatches
+# `websockets.connect`. It yields the mock connection on __aenter__ and
+# closes it on __aexit__, matching the real API.
+
+
+class MockWebSocketConnection:
+    """In-memory stand-in for websockets.WebSocketClientProtocol.
+
+    Parameters
+    ----------
+    frames:
+        Strings to deliver, in order, on successive recv / __anext__ calls.
+    close_exc:
+        If provided, raised after the last frame is consumed. Use this to
+        simulate server-side disconnection (e.g. ConnectionClosedError).
+        If None, the iterator raises ConnectionClosedOK after the last
+        frame to simulate a clean server close.
+    """
+
+    def __init__(
+        self,
+        frames: list[str],
+        close_exc: BaseException | None = None,
+    ) -> None:
+        self._frames: list[str] = list(frames)
+        self._close_exc = close_exc
+        self._closed: bool = False
+        self.sent: list[str] = []  # tests can inspect what we sent
+
+    def __aiter__(self) -> "MockWebSocketConnection":
+        return self
+
+    async def __anext__(self) -> str:
+        # Yield to the event loop so cancellation can interleave realistically.
+        await asyncio.sleep(0)
+        if self._frames:
+            return self._frames.pop(0)
+        # Out of frames — decide how to terminate.
+        # NOTE: The real websockets library catches ConnectionClosedOK inside
+        # its __aiter__ and converts it to StopAsyncIteration so `async for`
+        # ends cleanly. We mirror that here: clean close ends iteration;
+        # explicit close_exc (e.g. ConnectionClosedError) propagates.
+        if self._close_exc is not None:
+            raise self._close_exc
+        raise StopAsyncIteration
+
+    async def recv(self) -> str:
+        # recv() has different semantics from async-for: it raises
+        # ConnectionClosedOK when the connection is closed (matching the
+        # real websockets API). Tests that need recv-after-close should
+        # expect ConnectionClosedOK; tests that iterate via async-for
+        # should expect a clean end.
+        await asyncio.sleep(0)
+        if self._frames:
+            return self._frames.pop(0)
+        if self._close_exc is not None:
+            raise self._close_exc
+        from websockets.exceptions import ConnectionClosedOK
+        raise ConnectionClosedOK(None, None)
+
+    async def send(self, data: str) -> None:
+        self.sent.append(data)
+
+    async def close(self) -> None:
+        self._closed = True
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+
+@asynccontextmanager
+async def _mock_connect_factory(
+    frames: list[str],
+    close_exc: BaseException | None = None,
+):
+    """Async-context-manager that yields a MockWebSocketConnection.
+
+    Drop-in replacement for `websockets.connect(url, ...)`. Tests patch
+    `hermes.exchanges.binance_ws.websockets.connect` with a lambda that
+    returns this context manager pre-loaded with the desired frames.
+    """
+    conn = MockWebSocketConnection(frames, close_exc=close_exc)
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
+# ====================================================================== #
+# Phase 2.D.4b-i — Mock infrastructure sanity tests                       #
+# ====================================================================== #
+
+
+class TestMockWebSocketSanity:
+    """Verify the mock itself works before we rely on it for business tests."""
+
+    @pytest.mark.asyncio
+    async def test_mock_delivers_frames_in_order(self) -> None:
+        async with _mock_connect_factory(["a", "b", "c"]) as ws:
+            received = [m async for m in ws]
+        assert received == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_mock_clean_close_after_frames(self) -> None:
+        # With no close_exc, iteration should end cleanly (StopAsyncIteration)
+        # via ConnectionClosedOK being raised internally and async-for swallowing
+        # it the same way the real library would.
+        from websockets.exceptions import ConnectionClosedOK
+        async with _mock_connect_factory(["only_frame"]) as ws:
+            assert await ws.recv() == "only_frame"
+            with pytest.raises(ConnectionClosedOK):
+                await ws.recv()
+
+    @pytest.mark.asyncio
+    async def test_mock_custom_close_exception(self) -> None:
+        # Tests can inject specific disconnect exceptions to drive 2.D.5
+        # reconnect logic later.
+        from websockets.exceptions import ConnectionClosedError
+        exc = ConnectionClosedError(None, None)
+        async with _mock_connect_factory(["a"], close_exc=exc) as ws:
+            assert await ws.recv() == "a"
+            with pytest.raises(ConnectionClosedError):
+                await ws.recv()
+
+    @pytest.mark.asyncio
+    async def test_mock_records_sent_data(self) -> None:
+        async with _mock_connect_factory(["x"]) as ws:
+            await ws.send("hello")
+            await ws.send("world")
+        assert ws.sent == ["hello", "world"]
+
+    @pytest.mark.asyncio
+    async def test_mock_closes_on_context_exit(self) -> None:
+        async with _mock_connect_factory([]) as ws:
+            assert ws.closed is False
+        assert ws.closed is True
+
+
+# ====================================================================== #
+
+
+# ====================================================================== #
+# Phase 2.D.4b-ii - Read loop + lifecycle integration tests              #
+# ====================================================================== #
+
+
+def _patch_connect(monkeypatch, frames, close_exc=None):
+    """Helper: swap binance_ws.websockets.connect for our mock factory."""
+    def _fake_connect(url, **kwargs):
+        return _mock_connect_factory(frames, close_exc=close_exc)
+    monkeypatch.setattr(
+        "hermes.exchanges.binance_ws.websockets.connect",
+        _fake_connect,
+    )
+
+
+class TestReadLoopBasics:
+    @pytest.mark.asyncio
+    async def test_yields_three_klines_in_order(self, monkeypatch) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        frames = [
+            _make_kline_frame(),
+            _make_kline_frame(),
+            _make_kline_frame(),
+        ]
+        _patch_connect(monkeypatch, frames)
+
+        received = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for msg in ws.stream():
+                received.append(msg)
+
+        assert len(received) == 3
+        assert all(m.kind is StreamKind.KLINE for m in received)
+        assert all(m.kline is not None for m in received)
+
+
+class TestReadLoopMixedTypes:
+    @pytest.mark.asyncio
+    async def test_mixed_stream_types_dispatched_correctly(self, monkeypatch) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        frames = [
+            _make_kline_frame(),
+            _make_bookticker_frame(),
+            _make_trade_frame(),
+        ]
+        _patch_connect(monkeypatch, frames)
+
+        received = []
+        async with BinanceWsClient(
+            ["solusdt@kline_1m", "solusdt@bookticker", "solusdt@trade"]
+        ) as ws:
+            async for msg in ws.stream():
+                received.append(msg)
+
+        assert [m.kind for m in received] == [
+            StreamKind.KLINE,
+            StreamKind.BOOK_TICKER,
+            StreamKind.TRADE,
+        ]
+        assert received[0].kline is not None
+        assert received[1].book_ticker is not None
+        assert received[2].trade is not None
+
+
+class TestReadLoopGracefulClose:
+    @pytest.mark.asyncio
+    async def test_clean_server_close_ends_stream_without_raising(
+        self, monkeypatch
+    ) -> None:
+        _patch_connect(monkeypatch, [])
+
+        received = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for msg in ws.stream():
+                received.append(msg)
+
+        assert received == []
+
+
+class TestReadLoopGarbageDoesNotCrash:
+    @pytest.mark.asyncio
+    async def test_garbage_frame_produces_unknown_not_crash(
+        self, monkeypatch
+    ) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        frames = [
+            "not json at all {{{",
+            _make_kline_frame(),
+        ]
+        _patch_connect(monkeypatch, frames)
+
+        received = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for msg in ws.stream():
+                received.append(msg)
+
+        assert len(received) == 2
+        assert received[0].kind is StreamKind.UNKNOWN
+        assert received[1].kind is StreamKind.KLINE
+
+
+class TestZeroMessageLoss:
+    """Verifies that messages queued before connection-end are still delivered.
+
+    This is the design property that motivated option-A drain semantics in
+    stream(): if the read loop pushes N messages then the connection drops,
+    the consumer must still receive all N.
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_messages_delivered_even_after_disconnect(
+        self, monkeypatch
+    ) -> None:
+        from websockets.exceptions import ConnectionClosedError
+        frames = [_make_kline_frame() for _ in range(10)]
+        _patch_connect(
+            monkeypatch, frames,
+            close_exc=ConnectionClosedError(None, None),
+        )
+
+        received = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for msg in ws.stream():
+                received.append(msg)
+
+        assert len(received) == 10
+
+
+class TestLifecycleInvariants:
+    @pytest.mark.asyncio
+    async def test_main_task_set_inside_context(self, monkeypatch) -> None:
+        _patch_connect(monkeypatch, [])
+        ws = BinanceWsClient(["solusdt@kline_1m"])
+        assert ws._main_task is None
+        async with ws:
+            assert ws._main_task is not None
+
+    @pytest.mark.asyncio
+    async def test_closed_flag_set_after_exit(self, monkeypatch) -> None:
+        _patch_connect(monkeypatch, [])
+        ws = BinanceWsClient(["solusdt@kline_1m"])
+        async with ws:
+            pass
+        assert ws._closed is True
+
+    @pytest.mark.asyncio
+    async def test_reuse_after_close_raises(self, monkeypatch) -> None:
+        _patch_connect(monkeypatch, [])
+        ws = BinanceWsClient(["solusdt@kline_1m"])
+        async with ws:
+            pass
+        with pytest.raises(RuntimeError, match="cannot be reused"):
+            async with ws:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stream_outside_context_raises(self) -> None:
+        ws = BinanceWsClient(["solusdt@kline_1m"])
+        with pytest.raises(RuntimeError, match="can only be called inside"):
+            async for _ in ws.stream():
+                pass
+
+
+class TestBackpressureBoundedQueue:
+    @pytest.mark.asyncio
+    async def test_small_queue_does_not_drop_messages(self, monkeypatch) -> None:
+        """With queue_max_size=2 and 10 frames, slow consumer still gets all 10."""
+        from hermes.exchanges.binance_contracts import StreamKind
+        frames = [_make_kline_frame() for _ in range(10)]
+        _patch_connect(monkeypatch, frames)
+
+        received = []
+        async with BinanceWsClient(
+            ["solusdt@kline_1m"], queue_max_size=2
+        ) as ws:
+            async for msg in ws.stream():
+                received.append(msg)
+                await asyncio.sleep(0.001)
+
+        assert len(received) == 10
+        assert all(m.kind is StreamKind.KLINE for m in received)
