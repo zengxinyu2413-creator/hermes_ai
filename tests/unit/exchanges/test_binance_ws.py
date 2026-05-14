@@ -635,9 +635,24 @@ def _patch_connect(monkeypatch, frames, close_exc=None):
     )
 
 
+@pytest.fixture
+def bypass_reconnect(monkeypatch):
+    """Replace _run_with_reconnect with _run_one for read-loop tests.
+
+    Read-loop tests verify frame parsing/dispatch within a single connection.
+    Reconnect behavior is exercised separately (see TestReconnect). With
+    reconnect active, finite mock frames cause an infinite reconnect loop
+    that obscures these tests' actual concern.
+    """
+    monkeypatch.setattr(
+        "hermes.exchanges.binance_ws.BinanceWsClient._run_with_reconnect",
+        BinanceWsClient._run_one,
+    )
+
+
 class TestReadLoopBasics:
     @pytest.mark.asyncio
-    async def test_yields_three_klines_in_order(self, monkeypatch) -> None:
+    async def test_yields_three_klines_in_order(self, monkeypatch, bypass_reconnect) -> None:
         from hermes.exchanges.binance_contracts import StreamKind
         frames = [
             _make_kline_frame(),
@@ -658,7 +673,7 @@ class TestReadLoopBasics:
 
 class TestReadLoopMixedTypes:
     @pytest.mark.asyncio
-    async def test_mixed_stream_types_dispatched_correctly(self, monkeypatch) -> None:
+    async def test_mixed_stream_types_dispatched_correctly(self, monkeypatch, bypass_reconnect) -> None:
         from hermes.exchanges.binance_contracts import StreamKind
         frames = [
             _make_kline_frame(),
@@ -687,7 +702,7 @@ class TestReadLoopMixedTypes:
 class TestReadLoopGracefulClose:
     @pytest.mark.asyncio
     async def test_clean_server_close_ends_stream_without_raising(
-        self, monkeypatch
+        self, monkeypatch, bypass_reconnect
     ) -> None:
         _patch_connect(monkeypatch, [])
 
@@ -702,7 +717,7 @@ class TestReadLoopGracefulClose:
 class TestReadLoopGarbageDoesNotCrash:
     @pytest.mark.asyncio
     async def test_garbage_frame_produces_unknown_not_crash(
-        self, monkeypatch
+        self, monkeypatch, bypass_reconnect
     ) -> None:
         from hermes.exchanges.binance_contracts import StreamKind
         frames = [
@@ -731,7 +746,7 @@ class TestZeroMessageLoss:
 
     @pytest.mark.asyncio
     async def test_all_messages_delivered_even_after_disconnect(
-        self, monkeypatch
+        self, monkeypatch, bypass_reconnect
     ) -> None:
         from websockets.exceptions import ConnectionClosedError
         frames = [_make_kline_frame() for _ in range(10)]
@@ -785,7 +800,7 @@ class TestLifecycleInvariants:
 
 class TestBackpressureBoundedQueue:
     @pytest.mark.asyncio
-    async def test_small_queue_does_not_drop_messages(self, monkeypatch) -> None:
+    async def test_small_queue_does_not_drop_messages(self, monkeypatch, bypass_reconnect) -> None:
         """With queue_max_size=2 and 10 frames, slow consumer still gets all 10."""
         from hermes.exchanges.binance_contracts import StreamKind
         frames = [_make_kline_frame() for _ in range(10)]
