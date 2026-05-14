@@ -14,12 +14,25 @@ which point we'll use the new WebSocket-API RPC (userDataStream.subscribe).
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
+import structlog
+
+from hermes.exchanges.binance_contracts import (
+    BookTicker,
+    Kline,
+    StreamKind,
+    StreamMessage,
+    Trade,
+)
 from hermes.exchanges.binance_credentials import BinanceEnvironment
 
 if TYPE_CHECKING:
-    from hermes.exchanges.binance_contracts import StreamMessage
+    pass
+
+
+_logger = structlog.get_logger(__name__)
 
 
 # Combined-stream WebSocket base URLs.
@@ -177,6 +190,191 @@ class BinanceWsClient:
             f"streams={len(self._streams)}, "
             f"running={self.is_running})"
         )
+
+    # ------------------------------------------------------------------ #
+    # Message parsing (Phase 2.D.4a — pure functions, never raise)        #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _classify_stream(stream: str) -> StreamKind:
+        """Map a Binance combined-stream name to a :class:`StreamKind`.
+
+        Stream format: ``<symbol>@<type>[_<param>]``. Examples::
+
+            solusdt@kline_1m   -> KLINE
+            solusdt@bookTicker -> BOOK_TICKER  (Binance returns "bookticker")
+            solusdt@trade      -> TRADE
+            solusdt@depth20    -> UNKNOWN  (not supported in Phase 2.D)
+
+        Binance normalizes returned stream names to lowercase even when the
+        subscription used camelCase, so we lowercase the suffix before matching.
+        """
+        if "@" not in stream:
+            return StreamKind.UNKNOWN
+        suffix = stream.split("@", 1)[1].lower()
+        if suffix.startswith("kline_"):
+            return StreamKind.KLINE
+        if suffix == "bookticker":
+            return StreamKind.BOOK_TICKER
+        if suffix == "trade":
+            return StreamKind.TRADE
+        return StreamKind.UNKNOWN
+
+    @staticmethod
+    def _parse_message(raw: str) -> StreamMessage:
+        """Translate one raw combined-stream frame into a StreamMessage.
+
+        Never raises. Malformed or unrecognized frames produce
+        ``StreamMessage(kind=UNKNOWN)`` so the read loop survives bad data.
+        Diagnostic detail goes to structlog (``reason``, ``stream``,
+        ``raw_preview``) rather than the envelope, keeping the consumer API
+        narrow.
+
+        Expected envelope shape (Binance combined-stream)::
+
+            {"stream": "<name>", "data": { ...inner event... }}
+        """
+        # ---- Step 1: JSON decode ----
+        try:
+            envelope: Any = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            _logger.warning(
+                "ws_parse_failed",
+                reason="invalid_json",
+                error=str(exc),
+                raw_preview=raw[:120] if isinstance(raw, str) else repr(raw)[:120],
+            )
+            return StreamMessage(
+                kind=StreamKind.UNKNOWN,
+                received_at_ms=StreamMessage.now_ms(),
+                stream="",
+                raw={},
+            )
+
+        if not isinstance(envelope, dict):
+            _logger.warning(
+                "ws_parse_failed",
+                reason="envelope_not_object",
+                envelope_type=type(envelope).__name__,
+            )
+            return StreamMessage(
+                kind=StreamKind.UNKNOWN,
+                received_at_ms=StreamMessage.now_ms(),
+                stream="",
+                raw={},
+            )
+
+        # ---- Step 2: required envelope fields ----
+        stream = envelope.get("stream")
+        data = envelope.get("data")
+
+        if not isinstance(stream, str) or not stream:
+            _logger.warning(
+                "ws_parse_failed",
+                reason="missing_stream",
+                envelope_keys=list(envelope.keys()),
+            )
+            return StreamMessage(
+                kind=StreamKind.UNKNOWN,
+                received_at_ms=StreamMessage.now_ms(),
+                stream="",
+                raw=envelope,
+            )
+
+        if not isinstance(data, dict):
+            _logger.warning(
+                "ws_parse_failed",
+                reason="missing_data",
+                stream=stream,
+            )
+            return StreamMessage(
+                kind=StreamKind.UNKNOWN,
+                received_at_ms=StreamMessage.now_ms(),
+                stream=stream,
+                raw=envelope,
+            )
+
+        # ---- Step 3: classify stream type ----
+        kind = BinanceWsClient._classify_stream(stream)
+        if kind is StreamKind.UNKNOWN:
+            _logger.info(
+                "ws_unknown_stream_type",
+                stream=stream,
+            )
+            return StreamMessage(
+                kind=StreamKind.UNKNOWN,
+                received_at_ms=StreamMessage.now_ms(),
+                stream=stream,
+                raw=envelope,
+            )
+
+        # ---- Step 4: parse inner payload by kind ----
+        received_at_ms = StreamMessage.now_ms()
+        try:
+            if kind is StreamKind.KLINE:
+                # Inner Binance kline event: {"e": "kline", "s": "SOLUSDT", "k": {...}}
+                inner_symbol = data.get("s")
+                if not isinstance(inner_symbol, str):
+                    raise ValueError("kline event missing 's' (symbol)")
+                k_payload = data.get("k")
+                if not isinstance(k_payload, dict):
+                    raise ValueError("kline event missing 'k' (kline payload)")
+                # Interval from the stream name; split on "@kline_" to handle
+                # multi-char intervals (1m, 15m, 1h, 1d) unambiguously.
+                interval = stream.split("@kline_", 1)[1]
+                kline = Kline.from_binance_ws_payload(
+                    k_payload,
+                    symbol=inner_symbol,
+                    interval=interval,
+                )
+                return StreamMessage(
+                    kind=StreamKind.KLINE,
+                    received_at_ms=received_at_ms,
+                    stream=stream,
+                    kline=kline,
+                    raw=envelope,
+                )
+
+            if kind is StreamKind.BOOK_TICKER:
+                book_ticker = BookTicker.from_binance_ws_payload(
+                    data,
+                    received_at_ms=received_at_ms,
+                )
+                return StreamMessage(
+                    kind=StreamKind.BOOK_TICKER,
+                    received_at_ms=received_at_ms,
+                    stream=stream,
+                    book_ticker=book_ticker,
+                    raw=envelope,
+                )
+
+            if kind is StreamKind.TRADE:
+                trade = Trade.from_binance_ws_payload(data)
+                return StreamMessage(
+                    kind=StreamKind.TRADE,
+                    received_at_ms=received_at_ms,
+                    stream=stream,
+                    trade=trade,
+                    raw=envelope,
+                )
+
+            # Defensive: _classify_stream returned a kind we don't handle here.
+            raise ValueError(f"unhandled kind: {kind}")
+
+        except (ValueError, KeyError, TypeError) as exc:
+            _logger.warning(
+                "ws_parse_failed",
+                reason="payload_parse_error",
+                stream=stream,
+                kind=kind.value,
+                error=str(exc),
+            )
+            return StreamMessage(
+                kind=StreamKind.UNKNOWN,
+                received_at_ms=received_at_ms,
+                stream=stream,
+                raw=envelope,
+            )
 
     # ------------------------------------------------------------------ #
     # Async lifecycle (skeleton — wired in Step 2.D.4)                   #

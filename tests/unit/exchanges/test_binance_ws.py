@@ -8,6 +8,7 @@ land in Step 2.D.4.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -179,3 +180,238 @@ class TestLifecycleSkeleton:
         ws = BinanceWsClient(["solusdt@kline_1m"])
         with pytest.raises(NotImplementedError, match="Step 2.D.4"):
             await ws.stream()
+
+# ====================================================================== #
+# Phase 2.D.4a — Stream classification                                   #
+# ====================================================================== #
+
+
+class TestClassifyStream:
+    def test_kline_stream(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream(
+            "solusdt@kline_1m"
+        ) is StreamKind.KLINE
+
+    def test_kline_stream_various_intervals(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        for interval in ["1m", "5m", "15m", "1h", "4h", "1d"]:
+            assert BinanceWsClient._classify_stream(
+                f"solusdt@kline_{interval}"
+            ) is StreamKind.KLINE, f"failed on interval {interval}"
+
+    def test_bookticker_stream_lowercase(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream(
+            "solusdt@bookticker"
+        ) is StreamKind.BOOK_TICKER
+
+    def test_bookticker_stream_camelcase(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream(
+            "solusdt@bookTicker"
+        ) is StreamKind.BOOK_TICKER
+
+    def test_trade_stream(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream(
+            "solusdt@trade"
+        ) is StreamKind.TRADE
+
+    def test_depth_stream_is_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream(
+            "solusdt@depth20"
+        ) is StreamKind.UNKNOWN
+
+    def test_no_at_sign_is_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream(
+            "garbage"
+        ) is StreamKind.UNKNOWN
+
+    def test_empty_string_is_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        assert BinanceWsClient._classify_stream("") is StreamKind.UNKNOWN
+
+
+# ====================================================================== #
+# Phase 2.D.4a — Message parsing                                         #
+# ====================================================================== #
+
+
+def _make_kline_frame(
+    symbol: str = "SOLUSDT",
+    interval: str = "1m",
+    is_closed: bool = True,
+) -> str:
+    """Build a realistic Binance combined-stream kline frame as JSON string."""
+    return json.dumps({
+        "stream": f"{symbol.lower()}@kline_{interval}",
+        "data": {
+            "e": "kline",
+            "E": 1747200000123,
+            "s": symbol,
+            "k": {
+                "t": 1747200000000,
+                "T": 1747200059999,
+                "s": symbol,
+                "i": interval,
+                "f": 100,
+                "L": 200,
+                "o": "150.00",
+                "c": "150.50",
+                "h": "151.00",
+                "l": "149.50",
+                "v": "12.345",
+                "n": 42,
+                "x": is_closed,
+                "q": "1853.00",
+                "V": "6.0",
+                "Q": "900.0",
+                "B": "0",
+            },
+        },
+    })
+
+
+def _make_bookticker_frame(symbol: str = "SOLUSDT") -> str:
+    return json.dumps({
+        "stream": f"{symbol.lower()}@bookticker",
+        "data": {
+            "u": 400900217,
+            "s": symbol,
+            "b": "150.00",
+            "B": "10.5",
+            "a": "150.01",
+            "A": "5.2",
+        },
+    })
+
+
+def _make_trade_frame(symbol: str = "SOLUSDT") -> str:
+    return json.dumps({
+        "stream": f"{symbol.lower()}@trade",
+        "data": {
+            "e": "trade",
+            "E": 1747200000123,
+            "s": symbol,
+            "t": 12345,
+            "p": "150.00",
+            "q": "0.1",
+            "T": 1747200000000,
+            "m": False,
+        },
+    })
+
+
+class TestParseMessageHappyPath:
+    def test_parse_kline(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = _make_kline_frame()
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.KLINE
+        assert msg.stream == "solusdt@kline_1m"
+        assert msg.kline is not None
+        assert msg.kline.symbol == "SOLUSDT"
+        assert msg.kline.interval == "1m"
+        assert msg.kline.is_closed is True
+        assert msg.book_ticker is None
+        assert msg.trade is None
+
+    def test_parse_kline_in_progress(self) -> None:
+        raw = _make_kline_frame(is_closed=False)
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kline is not None
+        assert msg.kline.is_closed is False
+
+    def test_parse_bookticker(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = _make_bookticker_frame()
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.BOOK_TICKER
+        assert msg.book_ticker is not None
+        assert msg.book_ticker.symbol == "SOLUSDT"
+        assert msg.kline is None
+        assert msg.trade is None
+
+    def test_parse_trade(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = _make_trade_frame()
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.TRADE
+        assert msg.trade is not None
+        assert msg.trade.is_buyer_maker is False
+
+
+class TestParseMessageErrorPaths:
+    def test_invalid_json_returns_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        msg = BinanceWsClient._parse_message("not json at all {{{")
+        assert msg.kind is StreamKind.UNKNOWN
+        assert msg.stream == ""
+        assert msg.raw == {}
+
+    def test_non_object_envelope_returns_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        for raw in ["[]", "42", '"hello"', "null"]:
+            msg = BinanceWsClient._parse_message(raw)
+            assert msg.kind is StreamKind.UNKNOWN, f"failed on {raw!r}"
+
+    def test_missing_stream_field_returns_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = json.dumps({"data": {"foo": "bar"}})
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.UNKNOWN
+        assert msg.raw == {"data": {"foo": "bar"}}
+
+    def test_missing_data_field_returns_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = json.dumps({"stream": "solusdt@kline_1m"})
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.UNKNOWN
+        assert msg.stream == "solusdt@kline_1m"
+
+    def test_unknown_stream_type_returns_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = json.dumps({
+            "stream": "solusdt@depth20",
+            "data": {"bids": [], "asks": []},
+        })
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.UNKNOWN
+        assert msg.stream == "solusdt@depth20"
+
+    def test_kline_missing_inner_k_returns_unknown(self) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        raw = json.dumps({
+            "stream": "solusdt@kline_1m",
+            "data": {"e": "kline", "s": "SOLUSDT"},
+        })
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.UNKNOWN
+        assert msg.kline is None
+
+
+class TestParseMessageInvariants:
+    """The single most important property: parse never raises."""
+
+    @pytest.mark.parametrize("raw", [
+        "",
+        " ",
+        "null",
+        "{}",
+        "[]",
+        '{"stream": 1}',
+        '{"stream": "", "data": {}}',
+        '{"stream": "solusdt@kline_1m", "data": null}',
+        '{"stream": "solusdt@kline_1m", "data": []}',
+        "{not valid",
+        '{"a": "b"}',
+        "0",
+        "true",
+    ])
+    def test_never_raises_on_garbage(self, raw: str) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+        msg = BinanceWsClient._parse_message(raw)
+        assert msg.kind is StreamKind.UNKNOWN
