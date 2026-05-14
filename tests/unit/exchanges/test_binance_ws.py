@@ -53,13 +53,35 @@ class TestStreamsValidation:
         with pytest.raises(ValueError, match="non-empty"):
             BinanceWsClient([""])
 
-    def test_uppercase_stream_rejected(self) -> None:
+    def test_uppercase_symbol_rejected(self) -> None:
         with pytest.raises(ValueError, match="lowercase"):
             BinanceWsClient(["SOLUSDT@kline_1m"])
 
     def test_duplicate_stream_rejected(self) -> None:
         with pytest.raises(ValueError, match="duplicate"):
             BinanceWsClient(["solusdt@kline_1m", "solusdt@kline_1m"])
+
+    def test_accepts_camelcase_stream_type(self) -> None:
+        # Binance stream names are case-sensitive: 'bookTicker' is the
+        # documented form. The symbol part must be lowercase, but the
+        # stream-type part after '@' preserves Binance's mixed case.
+        client = BinanceWsClient(["solusdt@bookTicker"])
+        assert client.streams == ("solusdt@bookTicker",)
+
+    def test_accepts_mixed_streams_with_camelcase(self) -> None:
+        client = BinanceWsClient(
+            ["solusdt@kline_1m", "solusdt@bookTicker"]
+        )
+        assert client.streams == ("solusdt@kline_1m", "solusdt@bookTicker")
+
+    def test_missing_at_sign_rejected(self) -> None:
+        with pytest.raises(ValueError, match="must contain"):
+            BinanceWsClient(["solusdt"])
+
+    def test_invalid_stream_type_chars_rejected(self) -> None:
+        # Stream-type part must be [a-zA-Z0-9_]+: no spaces, hyphens, etc.
+        with pytest.raises(ValueError, match="must match"):
+            BinanceWsClient(["solusdt@book ticker"])
 
     def test_too_many_streams_rejected(self) -> None:
         # 201 unique streams > cap of 200

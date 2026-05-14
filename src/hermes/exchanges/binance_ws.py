@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import websockets
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +50,12 @@ _WS_BASE_URLS: dict[BinanceEnvironment, str] = {
 # streams per connection; we cap lower to keep one connection focused and
 # leave headroom for the strategy framework to open multiple clients.
 _MAX_STREAMS_PER_CONNECTION = 200
+
+# Binance stream-type part (after '@') accepts alphanumerics and underscore.
+# Binance is case-sensitive in stream names: 'bookTicker' is NOT the same as 'bookticker'
+# (the latter is silently ignored, no error returned). Symbol part (before '@')
+# must still be lowercase per Binance docs.
+_STREAM_TYPE_RE = re.compile(r"[a-zA-Z0-9_]+")
 
 
 class BinanceWsClient:
@@ -134,9 +141,25 @@ class BinanceWsClient:
                 )
             if not s:
                 raise ValueError("stream entries must be non-empty")
-            if s != s.lower():
+            if "@" not in s:
                 raise ValueError(
-                    f"stream {s!r} must be lowercase (Binance requirement)"
+                    f"stream {s!r} must contain '@' "
+                    "(format: <symbol>@<stream-type>)"
+                )
+            symbol_part, _, type_part = s.partition("@")
+            if "@" in type_part:
+                raise ValueError(
+                    f"stream {s!r} must contain exactly one '@'"
+                )
+            if symbol_part != symbol_part.lower():
+                raise ValueError(
+                    f"stream {s!r} symbol part {symbol_part!r} "
+                    "must be lowercase (Binance requirement)"
+                )
+            if not _STREAM_TYPE_RE.fullmatch(type_part):
+                raise ValueError(
+                    f"stream {s!r} stream-type part {type_part!r} "
+                    "must match [a-zA-Z0-9_]+"
                 )
             if s in seen:
                 raise ValueError(f"duplicate stream: {s!r}")
