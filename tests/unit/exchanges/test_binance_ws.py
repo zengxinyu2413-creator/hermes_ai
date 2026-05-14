@@ -126,6 +126,43 @@ class TestQueueSizeValidation:
 # ====================================================================== #
 
 
+class TestComputeBackoffDelay:
+    def test_attempt_1_returns_zero(self) -> None:
+        # attempt 1 = immediate retry: most blips recover within milliseconds
+        assert BinanceWsClient._compute_backoff_delay(1) == 0.0
+        assert BinanceWsClient._compute_backoff_delay(0) == 0.0
+        assert BinanceWsClient._compute_backoff_delay(-5) == 0.0
+
+    def test_attempt_grows_exponentially_within_jitter_band(self) -> None:
+        # For attempt N>=2, base = 2^(N-2). Jitter is +/-25%, so the result
+        # must land in [0.75*base, 1.25*base]. We sample 200 times per
+        # attempt to confirm the distribution stays within bounds.
+        for attempt, expected_base in [(2, 1), (3, 2), (4, 4), (5, 8), (6, 16)]:
+            samples = [
+                BinanceWsClient._compute_backoff_delay(attempt)
+                for _ in range(200)
+            ]
+            lower = expected_base * 0.75
+            upper = expected_base * 1.25
+            for delay in samples:
+                assert lower <= delay <= upper, (
+                    f"attempt={attempt} expected [{lower}, {upper}], got {delay}"
+                )
+
+    def test_capped_at_60_seconds(self) -> None:
+        # attempt 8 onwards: base = min(2^6=64, 60) = 60.
+        # With +/-25% jitter, upper bound is 75s.
+        for attempt in (8, 10, 20, 100):
+            samples = [
+                BinanceWsClient._compute_backoff_delay(attempt)
+                for _ in range(200)
+            ]
+            for delay in samples:
+                assert 45.0 <= delay <= 75.0, (
+                    f"attempt={attempt} should cap near 60s, got {delay}"
+                )
+
+
 class TestUrl:
     def test_testnet_url(self) -> None:
         ws = BinanceWsClient(

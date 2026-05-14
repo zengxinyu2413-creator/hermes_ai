@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import websockets
 from typing import TYPE_CHECKING, Any
@@ -56,6 +57,16 @@ _MAX_STREAMS_PER_CONNECTION = 200
 # (the latter is silently ignored, no error returned). Symbol part (before '@')
 # must still be lowercase per Binance docs.
 _STREAM_TYPE_RE = re.compile(r"[a-zA-Z0-9_]+")
+
+# Auto-reconnect parameters (Phase 2.D.5).
+# Backoff cap of 60s aligns with what most production HFT clients use:
+# fast enough to recover from short blips, slow enough to avoid hammering
+# Binance during outages.
+_MAX_BACKOFF_SECONDS = 60
+
+# Binance closes connections at the 24h mark. We reconnect at 23h to avoid
+# being kicked mid-frame and to spread reconnect load over time.
+_MAX_CONNECTION_SECONDS = 23 * 3600
 
 
 class BinanceWsClient:
@@ -178,6 +189,26 @@ class BinanceWsClient:
                 f"queue_max_size must be >= 1, got {size}"
             )
         return size
+
+    @staticmethod
+    def _compute_backoff_delay(attempt: int) -> float:
+        """Exponential backoff with +/-25% jitter, capped at 60s.
+
+        attempt 1 -> 0s  (immediate retry; transient blips often recover)
+        attempt 2 -> ~1s
+        attempt 3 -> ~2s
+        attempt N -> min(2^(N-2), 60) seconds, with +/-25% jitter applied
+
+        Jitter prevents reconnect storms when many clients are kicked
+        simultaneously (e.g. during a Binance maintenance window).
+
+        Returns 0.0 for attempt <= 1; non-negative float otherwise.
+        """
+        if attempt <= 1:
+            return 0.0
+        base = min(2 ** (attempt - 2), _MAX_BACKOFF_SECONDS)
+        jitter = random.uniform(-0.25, 0.25) * base
+        return max(0.0, base + jitter)
 
     # ------------------------------------------------------------------ #
     # Public read-only accessors                                         #
