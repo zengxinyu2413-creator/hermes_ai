@@ -422,7 +422,7 @@ class BinanceWsClient:
         # Queue is bound to the current event loop here, not at construction.
         self._queue = asyncio.Queue(maxsize=self._queue_max_size)
         self._main_task = asyncio.create_task(
-            self._run(), name=f"binance_ws_run[{self._env.value}]"
+            self._run_one(), name=f"binance_ws_run[{self._env.value}]"
         )
         _logger.info(
             "ws_client_entered",
@@ -449,7 +449,7 @@ class BinanceWsClient:
                 )
         _logger.info("ws_client_exited", env=self._env.value)
 
-    async def _run(self) -> None:
+    async def _run_one(self) -> None:
         """Single-connection read loop.
 
         Connects once, iterates frames, parses each into a StreamMessage,
