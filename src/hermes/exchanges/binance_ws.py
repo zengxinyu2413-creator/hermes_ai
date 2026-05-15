@@ -534,7 +534,8 @@ class BinanceWsClient:
         Connects once, iterates frames, parses each into a StreamMessage,
         and pushes to the queue. Terminates on:
           * clean server close (StopAsyncIteration from the iterator)
-          * any websockets exception (logged, then we return)
+          * any websockets exception (logged, then re-raised for
+          ``_run_with_reconnect`` to backoff and reconnect)
           * external task.cancel() (propagates as CancelledError - re-raised)
 
         ``_parse_message`` is guaranteed not to raise, so a single outer
@@ -560,15 +561,17 @@ class BinanceWsClient:
         except asyncio.CancelledError:
             _logger.info("ws_run_cancelled")
             raise
-        except Exception as exc:  # noqa: BLE001 - boundary swallow
-            # Anything else (connection refused, ConnectionClosedError, etc.)
-            # ends this run. Reconnect is Phase 2.D.5; for 2.D.4b we simply
-            # return so stream() can drain and finish.
+        except Exception as exc:  # noqa: BLE001 - log + re-raise for reconnect
+            # Anything else (connection refused, ConnectionClosedError,
+            # OSError, etc.) terminates this run. Re-raise so
+            # _run_with_reconnect can backoff and reconnect.
+            # CancelledError is handled separately above.
             _logger.warning(
                 "ws_run_terminated",
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            raise
 
     async def stream(self):
         """Async-iterate over :class:`StreamMessage` envelopes.

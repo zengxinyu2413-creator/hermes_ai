@@ -635,6 +635,36 @@ def _patch_connect(monkeypatch, frames, close_exc=None):
     )
 
 
+def _patch_connect_scripts(monkeypatch, scripts):
+    """Multi-attempt variant of ``_patch_connect`` for reconnect tests.
+
+    Each entry in ``scripts`` describes one ``websockets.connect()`` call:
+
+        {"frames": list[str], "close_exc": BaseException | None}
+
+    The Nth ``connect()`` call yields ``scripts[N-1]``; after the list is
+    exhausted the last entry repeats so a runaway reconnect loop is still
+    well-defined. Returns a single-element list whose [0] tracks how many
+    times ``connect()`` was invoked.
+    """
+    call_count = [0]
+
+    def _fake_connect(url, **kwargs):
+        idx = min(call_count[0], len(scripts) - 1)
+        call_count[0] += 1
+        script = scripts[idx]
+        return _mock_connect_factory(
+            list(script.get("frames", [])),
+            close_exc=script.get("close_exc"),
+        )
+
+    monkeypatch.setattr(
+        "hermes.exchanges.binance_ws.websockets.connect",
+        _fake_connect,
+    )
+    return call_count
+
+
 @pytest.fixture
 def bypass_reconnect(monkeypatch):
     """Replace _run_with_reconnect with _run_one for read-loop tests.
@@ -736,33 +766,6 @@ class TestReadLoopGarbageDoesNotCrash:
         assert received[1].kind is StreamKind.KLINE
 
 
-class TestZeroMessageLoss:
-    """Verifies that messages queued before connection-end are still delivered.
-
-    This is the design property that motivated option-A drain semantics in
-    stream(): if the read loop pushes N messages then the connection drops,
-    the consumer must still receive all N.
-    """
-
-    @pytest.mark.asyncio
-    async def test_all_messages_delivered_even_after_disconnect(
-        self, monkeypatch, bypass_reconnect
-    ) -> None:
-        from websockets.exceptions import ConnectionClosedError
-        frames = [_make_kline_frame() for _ in range(10)]
-        _patch_connect(
-            monkeypatch, frames,
-            close_exc=ConnectionClosedError(None, None),
-        )
-
-        received = []
-        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
-            async for msg in ws.stream():
-                received.append(msg)
-
-        assert len(received) == 10
-
-
 class TestLifecycleInvariants:
     @pytest.mark.asyncio
     async def test_main_task_set_inside_context(self, monkeypatch) -> None:
@@ -813,6 +816,70 @@ class TestBackpressureBoundedQueue:
             async for msg in ws.stream():
                 received.append(msg)
                 await asyncio.sleep(0.001)
+
+        assert len(received) == 10
+        assert all(m.kind is StreamKind.KLINE for m in received)
+
+
+class TestReconnect:
+    """End-to-end reconnect behavior (Phase 2.D.5b-iv).
+
+    These tests exercise ``_run_with_reconnect`` with real timing semantics:
+      * ``asyncio.sleep`` is patched to record delays without actually waiting.
+      * ``random.uniform`` is patched to zero out jitter for deterministic
+        backoff assertions where needed.
+
+    Note: ``bypass_reconnect`` is intentionally *not* used here.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zero_message_loss_across_reconnect(self, monkeypatch) -> None:
+        """All 10 frames are delivered to the consumer across 3 connections.
+
+        Setup: server delivers 3 frames, drops; then 3 more, drops; then 4
+        more. Consumer iterates ``ws.stream()`` and must see all 10 messages
+        with no loss and no duplication.
+        """
+        from websockets.exceptions import ConnectionClosedError
+        from hermes.exchanges.binance_contracts import StreamKind
+
+        # Patch asyncio.sleep so reconnect backoff does not block the test.
+        # Capture the real sleep before patching to avoid recursing into
+        # our own replacement.
+        real_sleep = asyncio.sleep
+        async def _fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+        monkeypatch.setattr(
+            "hermes.exchanges.binance_ws.asyncio.sleep",
+            _fast_sleep,
+        )
+
+        # Three connection attempts: 3 + 3 + 4 frames, each ending with a
+        # ConnectionClosedError that _run_one re-raises for reconnect.
+        scripts = [
+            {
+                "frames": [_make_kline_frame() for _ in range(3)],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            {
+                "frames": [_make_kline_frame() for _ in range(3)],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            {
+                "frames": [_make_kline_frame() for _ in range(4)],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+        ]
+        _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 10:
+                        return
+            await asyncio.wait_for(_collect(), timeout=1.0)
 
         assert len(received) == 10
         assert all(m.kind is StreamKind.KLINE for m in received)
