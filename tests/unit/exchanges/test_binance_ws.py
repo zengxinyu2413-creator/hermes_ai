@@ -501,9 +501,11 @@ class MockWebSocketConnection:
         self,
         frames: list[str],
         close_exc: BaseException | None = None,
+        hang_after_frames: bool = False,
     ) -> None:
         self._frames: list[str] = list(frames)
         self._close_exc = close_exc
+        self._hang_after_frames = hang_after_frames
         self._closed: bool = False
         self.sent: list[str] = []  # tests can inspect what we sent
 
@@ -515,6 +517,10 @@ class MockWebSocketConnection:
         await asyncio.sleep(0)
         if self._frames:
             return self._frames.pop(0)
+        if self._hang_after_frames:
+            # Simulate an idle but healthy connection: block forever
+            # until the surrounding task is cancelled by the caller.
+            await asyncio.Event().wait()
         # Out of frames — decide how to terminate.
         # NOTE: The real websockets library catches ConnectionClosedOK inside
         # its __aiter__ and converts it to StopAsyncIteration so `async for`
@@ -533,6 +539,8 @@ class MockWebSocketConnection:
         await asyncio.sleep(0)
         if self._frames:
             return self._frames.pop(0)
+        if self._hang_after_frames:
+            await asyncio.Event().wait()
         if self._close_exc is not None:
             raise self._close_exc
         from websockets.exceptions import ConnectionClosedOK
@@ -553,6 +561,7 @@ class MockWebSocketConnection:
 async def _mock_connect_factory(
     frames: list[str],
     close_exc: BaseException | None = None,
+    hang_after_frames: bool = False,
 ):
     """Async-context-manager that yields a MockWebSocketConnection.
 
@@ -560,7 +569,7 @@ async def _mock_connect_factory(
     `hermes.exchanges.binance_ws.websockets.connect` with a lambda that
     returns this context manager pre-loaded with the desired frames.
     """
-    conn = MockWebSocketConnection(frames, close_exc=close_exc)
+    conn = MockWebSocketConnection(frames, close_exc=close_exc, hang_after_frames=hang_after_frames)
     try:
         yield conn
     finally:
@@ -656,6 +665,7 @@ def _patch_connect_scripts(monkeypatch, scripts):
         return _mock_connect_factory(
             list(script.get("frames", [])),
             close_exc=script.get("close_exc"),
+            hang_after_frames=script.get("hang_after_frames", False),
         )
 
     monkeypatch.setattr(
@@ -678,6 +688,48 @@ def bypass_reconnect(monkeypatch):
         "hermes.exchanges.binance_ws.BinanceWsClient._run_with_reconnect",
         BinanceWsClient._run_one,
     )
+
+
+@pytest.fixture
+def no_jitter(monkeypatch):
+    """Zero out backoff jitter so reconnect delays are deterministic.
+
+    ``_compute_backoff_delay`` multiplies the base delay by
+    ``(1 + random.uniform(-0.25, 0.25))``. Patching ``random.uniform``
+    to return 0.0 makes the multiplier exactly 1 and the resulting
+    sequence is the pure ``[0, 1, 2, 4, 8, ...]`` capped at 60.
+    """
+    monkeypatch.setattr(
+        "hermes.exchanges.binance_ws.random.uniform",
+        lambda _a, _b: 0.0,
+    )
+
+
+@pytest.fixture
+def sleep_calls(monkeypatch):
+    """Record every asyncio.sleep call in binance_ws and skip the wait.
+
+    Captures the real asyncio.sleep reference BEFORE patching to avoid
+    the recursion trap where the replacement function would look up
+    asyncio.sleep again and find itself (because
+    ``hermes.exchanges.binance_ws.asyncio`` is the same module object
+    as the test's ``asyncio``).
+
+    Returns the list of recorded delays; tests can inspect the prefix
+    to assert on the backoff schedule.
+    """
+    calls: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def _recording_sleep(delay):
+        calls.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(
+        "hermes.exchanges.binance_ws.asyncio.sleep",
+        _recording_sleep,
+    )
+    return calls
 
 
 class TestReadLoopBasics:
@@ -883,3 +935,324 @@ class TestReconnect:
 
         assert len(received) == 10
         assert all(m.kind is StreamKind.KLINE for m in received)
+
+    @pytest.mark.asyncio
+    async def test_reconnect_after_connection_closed(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """After ConnectionClosedError, client reconnects and continues delivering.
+
+        Setup: first connection delivers 3 frames then is closed by the server
+        with ConnectionClosedError; the second connection delivers 3 more frames
+        then hangs (idle). The consumer collects all 6 frames before the test
+        exits via async-with, which cancels the read-loop cleanly.
+
+        Verifies:
+          * len(received) == 6 (no message loss across the reconnect boundary)
+          * call_count[0] >= 2 (at least two connect() invocations)
+          * all messages are KLINE (stream type preserved)
+        """
+        from websockets.exceptions import ConnectionClosedError
+        from hermes.exchanges.binance_contracts import StreamKind
+
+        scripts = [
+            {
+                "frames": [_make_kline_frame() for _ in range(3)],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            {
+                "frames": [_make_kline_frame() for _ in range(3)],
+                "hang_after_frames": True,
+            },
+        ]
+        call_count = _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 6:
+                        return
+            await asyncio.wait_for(_collect(), timeout=1.0)
+
+        assert len(received) == 6, f"expected 6 messages, got {len(received)}"
+        assert all(m.kind is StreamKind.KLINE for m in received)
+        assert call_count[0] >= 2, f"expected >= 2 connect attempts, got {call_count[0]}"
+
+    @pytest.mark.asyncio
+    async def test_unknown_exception_triggers_reconnect(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """Non-websockets exceptions also trigger reconnect.
+
+        The broad ``except Exception`` in ``_run_with_reconnect`` must catch
+        anything that isn't ``CancelledError`` -- including arbitrary
+        ``RuntimeError``s from buggy parsers, networking middleware, or other
+        unexpected sources -- and trigger a backoff + reconnect just like a
+        clean ``ConnectionClosedError`` would.
+
+        Without this guarantee a single transient bug downstream could silently
+        kill the stream forever.
+        """
+        from hermes.exchanges.binance_contracts import StreamKind
+
+        scripts = [
+            {
+                "frames": [_make_kline_frame() for _ in range(3)],
+                "close_exc": RuntimeError("simulated unexpected boom"),
+            },
+            {
+                "frames": [_make_kline_frame() for _ in range(3)],
+                "hang_after_frames": True,
+            },
+        ]
+        call_count = _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 6:
+                        return
+            await asyncio.wait_for(_collect(), timeout=1.0)
+
+        assert len(received) == 6, f"expected 6 messages, got {len(received)}"
+        assert all(m.kind is StreamKind.KLINE for m in received)
+        assert call_count[0] >= 2, f"expected >= 2 connect attempts, got {call_count[0]}"
+
+    @pytest.mark.asyncio
+    async def test_reconnect_exponential_backoff(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """Backoff between reconnect attempts follows ``[0, 1, 2, 4, 8, ...]``.
+
+        Five consecutive ``ConnectionClosedError`` connections force five
+        reconnect attempts; the 6th connection hangs so the test can exit
+        deterministically. With ``no_jitter`` patching ``random.uniform`` to
+        zero, the resulting backoff sequence must be:
+
+          attempt=1 -> 0  (always immediate)
+          attempt=2 -> 1  (2**0)
+          attempt=3 -> 2  (2**1)
+          attempt=4 -> 4  (2**2)
+          attempt=5 -> 8  (2**3)
+
+        We filter ``sleep_calls`` to delays > 0 to ignore the many
+        ``asyncio.sleep(0)`` cooperative yields from inside the read-loop
+        and from the mock connection itself.
+        """
+        from websockets.exceptions import ConnectionClosedError
+
+        scripts = [
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": ConnectionClosedError(None, None),
+            }
+            for _ in range(5)
+        ] + [
+            {
+                "frames": [_make_kline_frame()],
+                "hang_after_frames": True,
+            }
+        ]
+        call_count = _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 6:
+                        return
+            await asyncio.wait_for(_collect(), timeout=1.0)
+
+        # Filter to backoff sleeps (delay > 0); the mock + read-loop emit
+        # many cooperative sleep(0)s that are noise here.
+        backoff_delays = [d for d in sleep_calls if d > 0]
+        assert backoff_delays[:4] == [1, 2, 4, 8], (
+            f"expected backoff prefix [1, 2, 4, 8], got {backoff_delays[:4]}"
+        )
+        assert call_count[0] >= 6, (
+            f"expected >= 6 connect attempts, got {call_count[0]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_backoff_capped_at_60s(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """Backoff delay is capped at 60 seconds regardless of attempt count.
+
+        Without a cap, exponential growth would yield 128s, 256s, 512s, ...,
+        which would make recovery from extended outages absurdly slow. The
+        implementation caps backoff at ``_MAX_BACKOFF_SECONDS = 60``.
+
+        Setup: 10 consecutive ConnectionClosedError connections force
+        attempts 1..10. The expected backoff sequence (with no_jitter):
+
+          attempt=2 -> 1,  attempt=3 -> 2,  attempt=4 -> 4,  attempt=5 -> 8
+          attempt=6 -> 16, attempt=7 -> 32, attempt=8 -> 60 (capped from 64)
+          attempt=9 -> 60, attempt=10 -> 60
+        """
+        from websockets.exceptions import ConnectionClosedError
+
+        scripts = [
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": ConnectionClosedError(None, None),
+            }
+            for _ in range(10)
+        ] + [
+            {
+                "frames": [_make_kline_frame()],
+                "hang_after_frames": True,
+            }
+        ]
+        call_count = _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 11:
+                        return
+            await asyncio.wait_for(_collect(), timeout=2.0)
+
+        backoff_delays = [d for d in sleep_calls if d > 0]
+        assert max(backoff_delays) == 60, (
+            f"expected max backoff == 60, got {max(backoff_delays)}; "
+            f"full backoff sequence: {backoff_delays}"
+        )
+        # Also verify the cap is actually hit at least twice (attempts 8, 9, 10).
+        assert backoff_delays.count(60) >= 2, (
+            f"expected cap hit at least twice, got count={backoff_delays.count(60)}; "
+            f"sequence: {backoff_delays}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_backoff_reset_after_success(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """Attempt counter resets to 0 after a clean server close.
+
+        After a sustained healthy connection, a brief disconnect should NOT
+        be treated as the continuation of an old failure chain. Otherwise a
+        long-lived bot that has reconnected many times early in its life
+        would face minute-long backoffs for any later transient blip --
+        which is exactly when low latency matters most.
+
+        Setup:
+          script[0..1]: ClosedError x 2 -- attempt climbs to 2, backoff [1]
+          script[2]   : 1 frame then clean ConnectionClosedOK -- _run_one
+                        returns cleanly, attempt resets to 0
+          script[3..4]: ClosedError x 2 -- attempt climbs to 2 AGAIN, the
+                        backoff sequence restarts: another [1]
+          script[5]   : hang, lets the test exit
+
+        Expected backoff_delays (filtered to > 0): [1, 1], NOT [1, 2, 4].
+        """
+        from websockets.exceptions import ConnectionClosedError
+
+        scripts = [
+            # 2 failed connections
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            # 1 healthy connection that ends cleanly (close_exc=None ->
+            # mock raises StopAsyncIteration via the ConnectionClosedOK path,
+            # which _run_one treats as a clean server close)
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": None,
+            },
+            # 2 more failed connections after the healthy one
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            {
+                "frames": [_make_kline_frame()],
+                "close_exc": ConnectionClosedError(None, None),
+            },
+            # Hang so the test can exit deterministically
+            {
+                "frames": [_make_kline_frame()],
+                "hang_after_frames": True,
+            },
+        ]
+        call_count = _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 6:
+                        return
+            await asyncio.wait_for(_collect(), timeout=2.0)
+
+        backoff_delays = [d for d in sleep_calls if d > 0]
+        assert backoff_delays == [1, 1], (
+            f"expected backoff [1, 1] (reset after success), got {backoff_delays}"
+        )
+        assert call_count[0] >= 6, (
+            f"expected >= 6 connect attempts, got {call_count[0]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_exits_cleanly(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """User-triggered cancellation exits without reconnecting.
+
+        When the consumer leaves the ``async with`` block, ``__aexit__``
+        cancels the read-loop task. ``_run_with_reconnect`` must:
+          * propagate ``CancelledError`` (NOT treat it as a transient failure)
+          * NOT trigger a reconnect attempt
+          * NOT emit a backoff sleep
+
+        Without this guarantee, calling ``.close()`` on a healthy client
+        would race against an infinite reconnect loop, leaking tasks and
+        possibly opening a new connection right before shutdown.
+
+        Setup: one connection that delivers 1 frame then hangs forever.
+        The consumer collects that 1 frame and immediately exits the
+        async-with block, which should cancel the read-loop and unblock.
+        """
+        scripts = [
+            {
+                "frames": [_make_kline_frame()],
+                "hang_after_frames": True,
+            },
+        ]
+        call_count = _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect_one() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    return
+            await asyncio.wait_for(_collect_one(), timeout=1.0)
+        # Reaching this line means __aexit__ returned -- the cancel was clean.
+
+        assert len(received) == 1, (
+            f"expected 1 message before cancel, got {len(received)}"
+        )
+        assert call_count[0] == 1, (
+            f"expected exactly 1 connect (no reconnect after cancel), "
+            f"got {call_count[0]}"
+        )
+        # No backoff sleep should have been triggered: cancellation is not
+        # a transient failure.
+        backoff_delays = [d for d in sleep_calls if d > 0]
+        assert backoff_delays == [], (
+            f"expected no backoff sleeps on cancel, got {backoff_delays}"
+        )
