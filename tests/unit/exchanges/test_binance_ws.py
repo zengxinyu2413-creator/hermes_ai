@@ -1451,3 +1451,133 @@ class TestStructuredLogging:
 
         events = [e["event"] for e in cap]
         assert "ws_run_cancelled" in events
+
+
+# ====================================================================== #
+# Phase 2.D.6-iii — WsMetrics counter accuracy and snapshot guarantees   #
+# ====================================================================== #
+
+
+class TestWsMetrics:
+    """Verify WsMetrics snapshot values and immutability guarantees."""
+
+    @pytest.mark.asyncio
+    async def test_messages_received_total_increments(
+        self, monkeypatch, bypass_reconnect
+    ) -> None:
+        frames = [_make_kline_frame() for _ in range(5)]
+        _patch_connect(monkeypatch, frames)
+
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for _ in ws.stream():
+                pass
+
+        assert ws.metrics.messages_received_total == 5
+
+    @pytest.mark.asyncio
+    async def test_messages_by_kind_kline_counts(
+        self, monkeypatch, bypass_reconnect
+    ) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+
+        frames = [
+            _make_kline_frame(),
+            _make_bookticker_frame(),
+            _make_kline_frame(),
+            _make_bookticker_frame(),
+            _make_kline_frame(),
+        ]
+        _patch_connect(monkeypatch, frames)
+
+        async with BinanceWsClient(["solusdt@kline_1m", "solusdt@bookticker"]) as ws:
+            async for _ in ws.stream():
+                pass
+
+        m = ws.metrics
+        assert m.messages_by_kind[StreamKind.KLINE] == 3
+        assert m.messages_by_kind[StreamKind.BOOK_TICKER] == 2
+
+    @pytest.mark.asyncio
+    async def test_reconnect_count_after_one_disconnect(
+        self, monkeypatch, sleep_calls
+    ) -> None:
+        from websockets.exceptions import ConnectionClosedError
+
+        scripts = [
+            {"frames": [_make_kline_frame()], "close_exc": ConnectionClosedError(None, None)},
+            {"frames": [_make_kline_frame()], "hang_after_frames": True},
+        ]
+        _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 2:
+                        return
+            await asyncio.wait_for(_collect(), timeout=1.0)
+            assert ws.metrics.reconnect_count == 1
+
+    @pytest.mark.asyncio
+    async def test_current_attempt_resets_after_clean_reconnect(
+        self, monkeypatch, sleep_calls
+    ) -> None:
+        from websockets.exceptions import ConnectionClosedError
+
+        # script 0: fail  → _current_attempt = 1
+        # script 1: clean close → _run_with_reconnect resets _current_attempt = 0
+        # script 2: hang  → test reads metrics here; expects current_attempt == 0
+        scripts = [
+            {"frames": [_make_kline_frame()], "close_exc": ConnectionClosedError(None, None)},
+            {"frames": [_make_kline_frame()], "close_exc": None},
+            {"frames": [_make_kline_frame()], "hang_after_frames": True},
+        ]
+        _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 3:
+                        return
+            await asyncio.wait_for(_collect(), timeout=1.0)
+            # Frame 3 comes from script 2; script 1 has already returned cleanly,
+            # so _run_with_reconnect has set _current_attempt = 0 before entering
+            # script 2's _run_one. The public snapshot field is current_attempt.
+            assert ws.metrics.current_attempt == 0
+
+    def test_metrics_is_frozen(self) -> None:
+        from dataclasses import FrozenInstanceError
+        from hermes.exchanges.binance_contracts import WsMetrics
+
+        m = WsMetrics(
+            messages_received_total=0,
+            messages_by_kind={},
+            reconnect_count=0,
+            current_attempt=0,
+            last_message_at=None,
+            connected_since=None,
+            total_connect_duration_s=0.0,
+        )
+        with pytest.raises(FrozenInstanceError):
+            m.messages_received_total = 99  # type: ignore[misc]
+
+    @pytest.mark.asyncio
+    async def test_messages_by_kind_is_shallow_copy(
+        self, monkeypatch, bypass_reconnect
+    ) -> None:
+        from hermes.exchanges.binance_contracts import StreamKind
+
+        frames = [_make_kline_frame() for _ in range(3)]
+        _patch_connect(monkeypatch, frames)
+
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for _ in ws.stream():
+                pass
+
+        m = ws.metrics
+        assert m.messages_by_kind[StreamKind.KLINE] == 3
+        m.messages_by_kind[StreamKind.KLINE] = 999  # mutate the returned copy
+        assert ws.metrics.messages_by_kind[StreamKind.KLINE] == 3  # internal state unchanged
