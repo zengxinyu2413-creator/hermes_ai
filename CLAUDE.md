@@ -71,3 +71,10 @@ tests/e2e/         # full stack
 - Mypy runs in `strict` mode over `src/hermes` only.
 - Stream names passed to `BinanceWsClient` must have lowercase symbol parts (`solusdt@kline_1m`, not `SOLUSDT@kline_1m`) — Binance silently drops incorrectly-cased subscriptions.
 - `Kline.from_binance_ws_payload` accepts the inner `k` dict, not the outer event — the WS client unwraps before calling.
+- 会话窗口结束（额度耗尽 / session reset / 主动关闭）= 工作流程暂停。
+  重置后开新会话时，第一条消息必须是人明确说"做什么 + 不许做什么"。
+  PHASE_2D6_HANDOFF.md、SESSION_NOTES.md、README 路线图是参考资料，
+  不是任务清单。AI 不许把它们当 todo 自驱推进。
+- 重要确认（"是否 commit"、"是否进入下一子项"、"是否动 src"）必须由
+  人显式说"yes"或"go"。AI 一旦看到 working tree 干净就自动推进下一个
+  任务是禁止的。
