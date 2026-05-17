@@ -346,3 +346,22 @@ class StreamMessage:
     def now_ms() -> int:
         """Current local time in Unix ms. Exposed so tests can monkeypatch."""
         return int(time.time() * 1000)
+
+
+@dataclass(frozen=True, slots=True)
+class WsMetrics:
+    """Point-in-time snapshot of BinanceWsClient internal counters.
+
+    Returned by BinanceWsClient.metrics. All timestamp fields use
+    time.monotonic() — comparable within a process but not across restarts.
+    messages_by_kind is a shallow copy of the internal counter dict; mutating
+    it does not affect the client.
+    """
+
+    messages_received_total: int
+    messages_by_kind: dict[StreamKind, int]
+    reconnect_count: int
+    current_attempt: int
+    last_message_at: float | None    # monotonic; None until first message
+    connected_since: float | None    # monotonic; None when not connected
+    total_connect_duration_s: float

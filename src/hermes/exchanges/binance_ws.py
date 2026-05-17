@@ -17,6 +17,7 @@ import asyncio
 import json
 import random
 import re
+import time
 import websockets
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,7 @@ from hermes.exchanges.binance_contracts import (
     StreamKind,
     StreamMessage,
     Trade,
+    WsMetrics,
 )
 from hermes.exchanges.binance_credentials import BinanceEnvironment
 
@@ -116,6 +118,13 @@ class BinanceWsClient:
         "_queue",
         "_main_task",
         "_closed",
+        "_messages_received_total",
+        "_messages_by_kind",
+        "_reconnect_count",
+        "_current_attempt",
+        "_last_message_at",
+        "_connected_since",
+        "_total_connect_duration_s",
     )
 
     def __init__(
@@ -135,6 +144,15 @@ class BinanceWsClient:
         self._queue: asyncio.Queue[StreamMessage] | None = None
         self._main_task: asyncio.Task[None] | None = None
         self._closed: bool = False
+
+        # Metrics counters — updated by _run_one and _run_with_reconnect.
+        self._messages_received_total: int = 0
+        self._messages_by_kind: dict[StreamKind, int] = {}
+        self._reconnect_count: int = 0
+        self._current_attempt: int = 0
+        self._last_message_at: float | None = None
+        self._connected_since: float | None = None
+        self._total_connect_duration_s: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Validation helpers                                                 #
@@ -244,6 +262,19 @@ class BinanceWsClient:
     def is_running(self) -> bool:
         """True if the read loop task is alive."""
         return self._main_task is not None and not self._main_task.done()
+
+    @property
+    def metrics(self) -> WsMetrics:
+        """Point-in-time snapshot of counters. Safe to call from any coroutine."""
+        return WsMetrics(
+            messages_received_total=self._messages_received_total,
+            messages_by_kind=dict(self._messages_by_kind),
+            reconnect_count=self._reconnect_count,
+            current_attempt=self._current_attempt,
+            last_message_at=self._last_message_at,
+            connected_since=self._connected_since,
+            total_connect_duration_s=self._total_connect_duration_s,
+        )
 
     # ------------------------------------------------------------------ #
     # Repr                                                               #
@@ -512,10 +543,12 @@ class BinanceWsClient:
                 # Reset attempt and reconnect immediately.
                 _logger.info("ws_connection_closed_by_server")
                 attempt = 0
+                self._current_attempt = 0
             except asyncio.TimeoutError:
                 # 23h cap hit: proactive reconnect. Not a failure.
                 _logger.info("ws_proactive_reconnect_23h")
                 attempt = 0
+                self._current_attempt = 0
             except asyncio.CancelledError:
                 # User .close() triggered cancellation. Exit cleanly.
                 raise
@@ -528,6 +561,8 @@ class BinanceWsClient:
                     exc_info=True,
                 )
                 attempt += 1
+                self._reconnect_count += 1
+                self._current_attempt = attempt
 
             if attempt > 0:
                 delay = self._compute_backoff_delay(attempt)
@@ -559,19 +594,28 @@ class BinanceWsClient:
                 ping_interval=_WS_PING_INTERVAL,
                 ping_timeout=_WS_PING_TIMEOUT,
             ) as ws:
+                self._connected_since = time.monotonic()
                 _logger.info("ws_connected", url=self.url)
-                async for raw in ws:
-                    # raw can be str or bytes depending on the frame type.
-                    # Binance always sends text JSON for market-data streams,
-                    # but be defensive in case of unexpected binary frames.
-                    if isinstance(raw, bytes):
-                        try:
-                            raw = raw.decode("utf-8")
-                        except UnicodeDecodeError:
-                            _logger.warning("ws_binary_frame_skipped")
-                            continue
-                    msg = self._parse_message(raw)
-                    await self._queue.put(msg)
+                try:
+                    async for raw in ws:
+                        # raw can be str or bytes depending on the frame type.
+                        # Binance always sends text JSON for market-data streams,
+                        # but be defensive in case of unexpected binary frames.
+                        if isinstance(raw, bytes):
+                            try:
+                                raw = raw.decode("utf-8")
+                            except UnicodeDecodeError:
+                                _logger.warning("ws_binary_frame_skipped")
+                                continue
+                        self._messages_received_total += 1
+                        self._last_message_at = time.monotonic()
+                        msg = self._parse_message(raw)
+                        self._messages_by_kind[msg.kind] = self._messages_by_kind.get(msg.kind, 0) + 1
+                        await self._queue.put(msg)
+                finally:
+                    if self._connected_since is not None:
+                        self._total_connect_duration_s += time.monotonic() - self._connected_since
+                        self._connected_since = None
         except asyncio.CancelledError:
             _logger.info("ws_run_cancelled")
             raise
