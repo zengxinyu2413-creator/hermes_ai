@@ -68,6 +68,16 @@ _MAX_BACKOFF_SECONDS = 60
 # being kicked mid-frame and to spread reconnect load over time.
 _MAX_CONNECTION_SECONDS = 23 * 3600
 
+# WebSocket keepalive (Phase 2.D.6).
+# The websockets library sends a ping every _WS_PING_INTERVAL seconds and
+# closes the connection if no pong is received within _WS_PING_TIMEOUT.
+# This catches half-open TCP connections (NAT timeout, route flap, etc.)
+# faster than waiting on the OS TCP keepalive. A ConnectionClosed raised
+# here propagates through _run_one into _run_with_reconnect's broad except
+# and triggers backoff + reconnect.
+_WS_PING_INTERVAL = 20
+_WS_PING_TIMEOUT = 10
+
 
 class BinanceWsClient:
     """Async client for Binance combined market-data WebSocket streams.
@@ -544,7 +554,11 @@ class BinanceWsClient:
         """
         assert self._queue is not None  # set in __aenter__
         try:
-            async with websockets.connect(self.url) as ws:
+            async with websockets.connect(
+                self.url,
+                ping_interval=_WS_PING_INTERVAL,
+                ping_timeout=_WS_PING_TIMEOUT,
+            ) as ws:
                 _logger.info("ws_connected", url=self.url)
                 async for raw in ws:
                     # raw can be str or bytes depending on the frame type.

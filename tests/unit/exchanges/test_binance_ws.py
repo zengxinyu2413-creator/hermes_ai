@@ -1207,6 +1207,71 @@ class TestReconnect:
         )
 
     @pytest.mark.asyncio
+    async def test_proactive_reconnect_resets_attempt_counter(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        """23h timeout (proactive reconnect) resets attempt counter to 0.
+
+        Strategy: let one connection fail first (attempt=1 → sleep 0s), then
+        fire the 23h cap on the second wait_for call.  If the counter resets,
+        the next failure is attempt=1 again → sleep 0s (no positive delays).
+        If the counter were NOT reset, it would be attempt=2 → sleep 1s.
+        """
+        from hermes.exchanges.binance_ws import _MAX_CONNECTION_SECONDS
+
+        real_wait_for = asyncio.wait_for
+        # Let the first _run_one call through so one error can build the counter,
+        # then fire TimeoutError on the second call.
+        remaining = [1]
+        triggered = [False]
+
+        async def _fake_wait_for(coro, timeout):
+            if timeout == _MAX_CONNECTION_SECONDS and not triggered[0]:
+                if remaining[0] > 0:
+                    remaining[0] -= 1
+                else:
+                    triggered[0] = True
+                    coro.close()
+                    raise asyncio.TimeoutError
+            return await real_wait_for(coro, timeout)
+
+        monkeypatch.setattr(
+            "hermes.exchanges.binance_ws.asyncio.wait_for",
+            _fake_wait_for,
+        )
+
+        from websockets.exceptions import ConnectionClosedError
+
+        scripts = [
+            # Script 1 (runs normally): fails → attempt=1 → sleep(0)
+            {"frames": [], "close_exc": ConnectionClosedError(None, None)},
+            # Script 2 would run next but TimeoutError fires → attempt resets to 0
+            # Script 3: fails → attempt=1 (not 2) if counter was reset
+            {"frames": [_make_kline_frame()], "close_exc": ConnectionClosedError(None, None)},
+            # Script 4: hangs so _collect can finish after receiving 2 messages
+            {"frames": [_make_kline_frame()], "hang_after_frames": True},
+        ]
+        _patch_connect_scripts(monkeypatch, scripts)
+
+        received: list = []
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async def _collect() -> None:
+                async for msg in ws.stream():
+                    received.append(msg)
+                    if len(received) >= 2:
+                        return
+            await asyncio.wait_for(_collect(), timeout=2.0)
+
+        # With a reset: all errors are attempt=1 → delay=0 → no positive delays.
+        # Without a reset: attempt=2 → delay=1 would appear.
+        backoff_delays = [d for d in sleep_calls if d > 0]
+        assert backoff_delays == [], (
+            f"expected no positive backoff after proactive-reconnect reset, "
+            f"got {backoff_delays}"
+        )
+        assert len(received) == 2
+
+    @pytest.mark.asyncio
     async def test_cancelled_error_exits_cleanly(
         self, monkeypatch, no_jitter, sleep_calls
     ) -> None:
@@ -1256,3 +1321,133 @@ class TestReconnect:
         assert backoff_delays == [], (
             f"expected no backoff sleeps on cancel, got {backoff_delays}"
         )
+
+
+# ====================================================================== #
+# Phase 2.D.6 — WebSocket keepalive                                      #
+# ====================================================================== #
+
+
+class TestKeepaliveConstants:
+    def test_ping_interval_is_20(self) -> None:
+        from hermes.exchanges.binance_ws import _WS_PING_INTERVAL
+        assert _WS_PING_INTERVAL == 20
+
+    def test_ping_timeout_is_10(self) -> None:
+        from hermes.exchanges.binance_ws import _WS_PING_TIMEOUT
+        assert _WS_PING_TIMEOUT == 10
+
+    def test_timeout_less_than_interval(self) -> None:
+        # If timeout >= interval the library may close before the pong arrives.
+        from hermes.exchanges.binance_ws import _WS_PING_INTERVAL, _WS_PING_TIMEOUT
+        assert _WS_PING_TIMEOUT < _WS_PING_INTERVAL
+
+
+class TestKeepalivePassthrough:
+    """ping_interval and ping_timeout must be forwarded to websockets.connect."""
+
+    @pytest.mark.asyncio
+    async def test_connect_receives_ping_kwargs(
+        self, monkeypatch, bypass_reconnect
+    ) -> None:
+        from hermes.exchanges.binance_ws import _WS_PING_INTERVAL, _WS_PING_TIMEOUT
+
+        captured: dict = {}
+
+        def _recording_connect(url, **kwargs):
+            captured.update(kwargs)
+            return _mock_connect_factory([])
+
+        monkeypatch.setattr(
+            "hermes.exchanges.binance_ws.websockets.connect",
+            _recording_connect,
+        )
+
+        async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+            async for _ in ws.stream():
+                pass
+
+        assert captured.get("ping_interval") == _WS_PING_INTERVAL, (
+            f"expected ping_interval={_WS_PING_INTERVAL}, "
+            f"got {captured.get('ping_interval')!r}"
+        )
+        assert captured.get("ping_timeout") == _WS_PING_TIMEOUT, (
+            f"expected ping_timeout={_WS_PING_TIMEOUT}, "
+            f"got {captured.get('ping_timeout')!r}"
+        )
+
+
+# ====================================================================== #
+# Phase 2.D.6 — Structured logging safety net                            #
+# ====================================================================== #
+
+
+class TestStructuredLogging:
+    """Verify key lifecycle events are emitted via structlog."""
+
+    @pytest.mark.asyncio
+    async def test_logs_ws_connected_on_open(
+        self, monkeypatch, bypass_reconnect
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        _patch_connect(monkeypatch, [_make_kline_frame()])
+        client = BinanceWsClient(["solusdt@kline_1m"])
+        expected_url = client.url
+
+        with capture_logs() as cap:
+            async with client as ws:
+                async for _ in ws.stream():
+                    pass
+
+        events = [e["event"] for e in cap]
+        assert "ws_connected" in events
+        connected = next(e for e in cap if e["event"] == "ws_connected")
+        assert "url" in connected
+        assert connected["url"] == expected_url
+
+    @pytest.mark.asyncio
+    async def test_logs_ws_reconnect_scheduled_on_error(
+        self, monkeypatch, no_jitter, sleep_calls
+    ) -> None:
+        from structlog.testing import capture_logs
+        from websockets.exceptions import ConnectionClosedError
+
+        scripts = [
+            {"frames": [], "close_exc": ConnectionClosedError(None, None)},
+            {"frames": [_make_kline_frame()], "hang_after_frames": True},
+        ]
+        _patch_connect_scripts(monkeypatch, scripts)
+
+        with capture_logs() as cap:
+            async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+                async for _ in ws.stream():
+                    break
+
+        scheduled = [e for e in cap if e["event"] == "ws_reconnect_scheduled"]
+        assert scheduled, "expected at least one ws_reconnect_scheduled event"
+        evt = scheduled[0]
+        assert "attempt" in evt
+        assert "delay_seconds" in evt
+
+    @pytest.mark.asyncio
+    async def test_logs_ws_run_cancelled_on_close(
+        self, monkeypatch, bypass_reconnect
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        # Deliver one frame so the task is provably at asyncio.Event().wait()
+        # (hanging) by the time __aexit__ cancels it. Without a frame, the
+        # task may not have reached the hang point yet when cancel() fires.
+        _patch_connect_scripts(
+            monkeypatch,
+            [{"frames": [_make_kline_frame()], "hang_after_frames": True}],
+        )
+
+        with capture_logs() as cap:
+            async with BinanceWsClient(["solusdt@kline_1m"]) as ws:
+                async for _ in ws.stream():
+                    break  # collect the frame; task is now hanging
+
+        events = [e["event"] for e in cap]
+        assert "ws_run_cancelled" in events
