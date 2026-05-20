@@ -1,0 +1,59 @@
+# Hermes AI v6 — Infrastructure stack
+# Phase 3: TimescaleDB only. Redis joins in Phase 4+.
+#
+# Operations:
+#   Start:    docker compose up -d
+#   Stop:     docker compose stop
+#   Logs:     docker compose logs -f tsdb
+#   Shell:    docker compose exec tsdb psql -U hermes -d hermes
+#   Destroy:  docker compose down              (keeps data)
+#   Nuke:     docker compose down -v            (DELETES data volume)
+
+services:
+  tsdb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: hermes-tsdb
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${TSDB_USER}
+      POSTGRES_PASSWORD: ${TSDB_PASSWORD}
+      POSTGRES_DB: ${TSDB_DB}
+      TZ: Asia/Tokyo
+      PGTZ: Asia/Tokyo
+      # TimescaleDB tuning hint — let it pick safe defaults for our RAM.
+      TS_TUNE_MEMORY: 1500MB
+      TS_TUNE_NUM_CPUS: 2
+
+    ports:
+      # 127.0.0.1 ONLY — never expose 5432 to the public internet.
+      # External access must go through SSH tunnel.
+      - "127.0.0.1:${TSDB_PORT}:5432"
+
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+
+    shm_size: 256mb
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TSDB_USER} -d ${TSDB_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+          cpus: '1.5'
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  tsdb_data:
+    name: hermes_tsdb_data
