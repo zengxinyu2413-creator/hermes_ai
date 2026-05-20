@@ -31,6 +31,8 @@ dependencies = [
     "polars>=1.20,<2.0",
     # 数据库
     "psycopg[binary]>=3.2,<4.0",         # PostgreSQL/TimescaleDB
+    "psycopg-pool>=3.3,<4.0",            # psycopg3 connection pool (Phase 3.C)
+    "yoyo-migrations>=9.0,<10.0",        # SQL migration runner (Phase 3.A.1+)
     "redis[hiredis]>=5.2,<6.0",          # Redis
     "sqlalchemy>=2.0,<3.0",              # ORM (可选)
     # 机器学习
