@@ -183,12 +183,11 @@ SELECT add_compression_policy('klines', INTERVAL '30 days');
 CREATE TABLE book_tickers (
     symbol       TEXT          NOT NULL,
     received_at  TIMESTAMPTZ   NOT NULL,
-    update_id    BIGINT        NOT NULL,
     bid_price    NUMERIC(18,8) NOT NULL,
     bid_qty      NUMERIC(18,8) NOT NULL,
     ask_price    NUMERIC(18,8) NOT NULL,
     ask_qty      NUMERIC(18,8) NOT NULL,
-    PRIMARY KEY (symbol, received_at, update_id)
+    PRIMARY KEY (symbol, received_at)
 );
 
 SELECT create_hypertable('book_tickers', 'received_at', chunk_time_interval => INTERVAL '1 day');
@@ -200,7 +199,6 @@ SELECT create_hypertable('book_tickers', 'received_at', chunk_time_interval => I
 |---|---|---|---|
 | `symbol` | TEXT | `BookTicker.symbol` | |
 | `received_at` | TIMESTAMPTZ | `BookTicker.received_at_ms` (转换) | Hypertable 时间列;客户端接收时刻 |
-| `update_id` | BIGINT | 从 Binance payload 的 `u` 字段 | 单调递增,主键 tiebreaker |
 | `bid_price` | NUMERIC(18,8) | `BookTicker.bid_price` | |
 | `bid_qty` | NUMERIC(18,8) | `BookTicker.bid_qty` | |
 | `ask_price` | NUMERIC(18,8) | `BookTicker.ask_price` | |
@@ -208,12 +206,18 @@ SELECT create_hypertable('book_tickers', 'received_at', chunk_time_interval => I
 
 ### 6.3 主键
 
-`(symbol, received_at, update_id)` —— 三元主键。
+`(symbol, received_at)` —— 二元主键。
 
-- `(symbol, received_at)` 单独不够:ms 精度下 1 个 symbol 1 秒内 ~10 条,撞戳概率不低
-- Binance bookTicker payload 里的 `u`(updateId) 是**该 symbol 全局单调递增**,引入它作为 tiebreaker 既保证唯一性,又能在异常排查时按更新序列回放
+**决策记录(Phase 3.A.0 close-out,2026-05-20)**:Phase 2 的 `BookTicker` dataclass 不含 `update_id`(已回查 `src/hermes/exchanges/binance_contracts.py`),且原始 WS payload 的 `u` 字段在 Phase 2 WsClient parse 时已被丢弃。由于 `src/hermes/exchanges/` 是 FROZEN,Phase 3 不能改 dataclass / parser,因此采用**主键退化方案**:
 
-⚠️ **未决:Phase 2 的 `BookTicker` dataclass 当前是否包含 `update_id` 字段?** 我看交接文档没明说。如果没有,Phase 3 写入层需要从原始 WS payload 里多解析一个字段塞进 dict,**不修改 frozen dataclass**。这点在 `data_layer.md` 里展开。
+- 二元主键 `(symbol, received_at)`,允许 ms 撞戳时 `ON CONFLICT DO NOTHING` 丢弃后到事件
+- 写入语义见 §10:`INSERT ... ON CONFLICT (symbol, received_at) DO NOTHING`
+
+**风险评估**:
+
+- `received_at_ms` 是**本地接收时刻**(非 Binance 撮合时刻),本地接收抖动通常 ≥100µs,真正撞 ms 概率低
+- 即使偶发丢失 1-2 条 bookTicker,对采样型微结构特征影响微小(book ticker 本身就是状态快照)
+- 若 Phase 4+ 实测撞戳率不可接受,届时考虑解冻 `exchanges/` 加 `update_id`,或在 dispatcher 端加 sequence counter
 
 ### 6.4 chunk_time_interval
 
@@ -226,7 +230,7 @@ SELECT create_hypertable('book_tickers', 'received_at', chunk_time_interval => I
 ```sql
 ALTER TABLE book_tickers SET (
     timescaledb.compress,
-    timescaledb.compress_orderby = 'received_at DESC, update_id DESC',
+    timescaledb.compress_orderby = 'received_at DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 SELECT add_compression_policy('book_tickers', INTERVAL '7 days');
@@ -308,7 +312,7 @@ SELECT add_retention_policy('trades', INTERVAL '30 days');
 | 表 | 时间列 | chunk_time_interval | 主键 | 压缩 | Retention |
 |---|---|---|---|---|---|
 | `klines` | `open_time` | 7 天 | `(symbol, interval, open_time)` | 30d 后压缩 | 永久 |
-| `book_tickers` | `received_at` | 1 天 | `(symbol, received_at, update_id)` | 7d 后压缩 | 30 天 |
+| `book_tickers` | `received_at` | 1 天 | `(symbol, received_at)` | 7d 后压缩 | 30 天 |
 | `trades` | `trade_time` | 1 天 | `(symbol, trade_id, trade_time)` | 7d 后压缩 | 30 天 |
 
 ---
@@ -340,7 +344,6 @@ SELECT add_retention_policy('trades', INTERVAL '30 days');
 |---|---|---|---|---|
 | `symbol` | `str` | `symbol` | TEXT | 直接 |
 | `received_at_ms` | `int` | `received_at` | TIMESTAMPTZ | `fromtimestamp(ms/1000, UTC)` |
-| (新:WS payload `u`) | `int` | `update_id` | BIGINT | 写入层从 raw payload 提取 |
 | `bid_price` | `Decimal` | `bid_price` | NUMERIC(18,8) | 直接 |
 | `bid_qty` | `Decimal` | `bid_qty` | NUMERIC(18,8) | 直接 |
 | `ask_price` | `Decimal` | `ask_price` | NUMERIC(18,8) | 直接 |
@@ -364,7 +367,7 @@ SELECT add_retention_policy('trades', INTERVAL '30 days');
 本节只声明语义,**不实现**:
 
 - **klines**:`INSERT ... ON CONFLICT (symbol, interval, open_time) DO UPDATE` —— 未闭合 K 线可能被后续闭合版本覆盖
-- **book_tickers**:`INSERT ... ON CONFLICT DO NOTHING` —— 同 update_id 重复时跳过(网络重连可能重发)
+- **book_tickers**:`INSERT ... ON CONFLICT (symbol, received_at) DO NOTHING` —— 同 (symbol, received_at) 撞戳时跳过(WS 重连重发,或 ms 级别真实撞戳)
 - **trades**:`INSERT ... ON CONFLICT DO NOTHING` —— trade_id 全局唯一,重复跳过
 
 ---
@@ -386,7 +389,7 @@ SELECT add_retention_policy('trades', INTERVAL '30 days');
 
 落地前(Phase 3.A.1 准备写 migration 时)必须解决:
 
-1. **`BookTicker` dataclass 是否含 `update_id`**:需要回查 `src/hermes/exchanges/binance_contracts.py`。如不含,写入层需从原始 WS payload 解析,**不修改 frozen dataclass**。如果原始 payload 也没有,改用 `(symbol, received_at, bid_price, ask_price)` 唯一性兜底(差,但可行)。
+1. ~~**`BookTicker` dataclass 是否含 `update_id`**~~ — **已决(Phase 3.A.0 close-out,2026-05-20)**:dataclass 不含 `update_id`,原始 WS payload 的 `u` 在 Phase 2 parse 时已被丢弃。`exchanges/` FROZEN,采用主键退化方案 `(symbol, received_at)` + `DO NOTHING`,详见 §6.3。
 2. **`klines` 是否要把未闭合 K 线落库**:倾向"只写 `is_closed = TRUE` 的"。但 Phase 3.B ingestion 设计可能需要落未闭合行以支持实时策略,届时表里要不要存 `is_closed = FALSE` 的中间状态?当前文档默认"只写闭合",该字段保留是为了 schema 兼容未来变更。
 3. **额外二级索引**:Phase 3.A.0 不预先优化,仅依赖主键。3.C 写入实战后跑慢查询分析,再补 `CREATE INDEX`。
 4. **压缩 segmentby 的基数权衡**:`compress_segmentby = 'symbol'` 假设我们交易的 symbol 数量在 5~20 区间。若未来扩到 100+,segmentby 基数过高会影响压缩率,需重评估。
