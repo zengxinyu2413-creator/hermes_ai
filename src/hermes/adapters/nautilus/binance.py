@@ -86,7 +86,7 @@ def kline_to_bar(
         bar_type: nautilus BarType identifying the instrument and timeframe.
                   Caller is responsible for building this consistently with
                   kline.symbol and kline.interval via build_bar_type().
-        price_precision: decimal places for nautilus Price (e.g. 2 for BTCUSDT, 4 for SOLUSDT).
+        price_precision: decimal places for nautilus Price (e.g. 2 for BTCUSDT, 2 for SOLUSDT).
         size_precision: decimal places for nautilus Quantity (volume).
 
     Returns:

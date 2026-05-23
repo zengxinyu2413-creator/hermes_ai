@@ -92,3 +92,8 @@ _tmp_*.py
 experiments/
 venv-new/
 venv-old/
+
+# Protect ALL .env variants (backups, nano .save, dated copies) from accidental commit
+.env*
+*.env
+infra/.env*
