@@ -931,7 +931,12 @@ class TestReconnect:
                     received.append(msg)
                     if len(received) >= 10:
                         return
-            await asyncio.wait_for(_collect(), timeout=1.0)
+            # 10 s: Python 3.12 changed asyncio.wait_for to run the wrapped
+            # coroutine inline (no sub-task), which changes event loop
+            # scheduling cadence and makes each reconnect cycle take ~0.15 s
+            # instead of the sub-task-based scheduling in 3.11.  The test
+            # verifies correctness, not speed, so a generous deadline is fine.
+            await asyncio.wait_for(_collect(), timeout=10.0)
 
         assert len(received) == 10
         assert all(m.kind is StreamKind.KLINE for m in received)

@@ -90,3 +90,5 @@ Thumbs.db
 desktop.ini
 _tmp_*.py
 experiments/
+venv-new/
+venv-old/

@@ -3,9 +3,9 @@ import sys
 
 
 def test_python_version():
-    """Verify we are running on Python 3.11."""
-    assert sys.version_info[:2] == (3, 11), (
-        f"Expected Python 3.11, got {sys.version_info[:2]}"
+    """Verify we are running on Python 3.12."""
+    assert sys.version_info[:2] == (3, 12), (
+        f"Expected Python 3.12, got {sys.version_info[:2]}"
     )
 
 
@@ -33,8 +33,8 @@ def test_nautilus_version():
     version = nautilus_trader.__version__
     parts = version.split(".")
     major, minor = int(parts[0]), int(parts[1])
-    assert major == 1 and minor == 221, (
-        f"Expected nautilus-trader 1.221.x, got {version}"
+    assert major == 1 and minor == 227, (
+        f"Expected nautilus-trader 1.227.x, got {version}"
     )
 
 
