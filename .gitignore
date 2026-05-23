@@ -89,3 +89,4 @@ backtest_results/*.pkl
 Thumbs.db
 desktop.ini
 _tmp_*.py
+experiments/
