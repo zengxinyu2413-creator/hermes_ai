@@ -13,7 +13,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 CREATE TABLE trades (
     symbol          TEXT          NOT NULL,
@@ -25,4 +24,3 @@ CREATE TABLE trades (
     PRIMARY KEY (symbol, trade_id, trade_time)
 );
 
-COMMIT;

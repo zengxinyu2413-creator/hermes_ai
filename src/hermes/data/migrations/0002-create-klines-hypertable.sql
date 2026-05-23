@@ -8,8 +8,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 SELECT create_hypertable('klines', 'open_time', chunk_time_interval => INTERVAL '7 days');
 
-COMMIT;

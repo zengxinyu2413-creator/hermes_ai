@@ -3,8 +3,6 @@
 --              (retention drops are irreversible); this only stops future drops.
 -- destructive: no
 
-BEGIN;
 
 SELECT remove_retention_policy('trades', if_exists => true);
 
-COMMIT;

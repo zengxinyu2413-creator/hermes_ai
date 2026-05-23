@@ -8,8 +8,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 SELECT create_hypertable('book_tickers', 'received_at', chunk_time_interval => INTERVAL '1 day');
 
-COMMIT;

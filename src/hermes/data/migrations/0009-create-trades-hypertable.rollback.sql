@@ -8,7 +8,6 @@
 -- destructive: YES (irreversible data loss for any rows in trades)
 -- pre-check: confirm no application writers are running against trades before rollback
 
-BEGIN;
 
 DROP TABLE IF EXISTS trades;
 
@@ -22,4 +21,3 @@ CREATE TABLE trades (
     PRIMARY KEY (symbol, trade_id, trade_time)
 );
 
-COMMIT;

@@ -8,7 +8,6 @@
 -- destructive: YES (irreversible data loss for any rows in book_tickers)
 -- pre-check: confirm no application writers are running against book_tickers before rollback
 
-BEGIN;
 
 DROP TABLE IF EXISTS book_tickers;
 
@@ -22,4 +21,3 @@ CREATE TABLE book_tickers (
     PRIMARY KEY (symbol, received_at)
 );
 
-COMMIT;

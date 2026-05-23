@@ -9,7 +9,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 ALTER TABLE klines SET (
     timescaledb.compress,
@@ -19,4 +18,3 @@ ALTER TABLE klines SET (
 
 SELECT add_compression_policy('klines', INTERVAL '30 days');
 
-COMMIT;

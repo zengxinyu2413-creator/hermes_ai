@@ -7,8 +7,6 @@
 --              dropped by the policy before rollback cannot be recovered, but the
 --              rollback operation itself discards no rows)
 
-BEGIN;
 
 SELECT remove_retention_policy('book_tickers', if_exists => true);
 
-COMMIT;

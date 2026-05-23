@@ -9,7 +9,6 @@
 --              WARNING: decompression is an I/O-intensive operation if compressed chunks exist)
 -- pre-check: confirm no application writers are running against trades before rollback
 
-BEGIN;
 
 SELECT remove_compression_policy('trades', if_exists => true);
 
@@ -17,4 +16,3 @@ SELECT decompress_chunk(c) FROM show_chunks('trades') c;
 
 ALTER TABLE trades SET (timescaledb.compress = false);
 
-COMMIT;

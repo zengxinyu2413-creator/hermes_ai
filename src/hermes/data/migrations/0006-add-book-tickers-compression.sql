@@ -9,7 +9,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 ALTER TABLE book_tickers SET (
     timescaledb.compress,
@@ -19,4 +18,3 @@ ALTER TABLE book_tickers SET (
 
 SELECT add_compression_policy('book_tickers', INTERVAL '7 days');
 
-COMMIT;

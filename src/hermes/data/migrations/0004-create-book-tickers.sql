@@ -9,7 +9,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 CREATE TABLE book_tickers (
     symbol       TEXT          NOT NULL,
@@ -21,4 +20,3 @@ CREATE TABLE book_tickers (
     PRIMARY KEY (symbol, received_at)
 );
 
-COMMIT;

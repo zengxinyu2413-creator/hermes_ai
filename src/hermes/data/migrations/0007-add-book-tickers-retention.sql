@@ -11,8 +11,6 @@
 -- requires-downtime: no
 -- destructive: no (only attaches a background job; existing data is untouched at apply time)
 
-BEGIN;
 
 SELECT add_retention_policy('book_tickers', INTERVAL '30 days');
 
-COMMIT;

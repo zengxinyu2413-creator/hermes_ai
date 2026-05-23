@@ -9,7 +9,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 CREATE TABLE klines (
     symbol           TEXT          NOT NULL,
@@ -29,4 +28,3 @@ CREATE TABLE klines (
     PRIMARY KEY (symbol, interval, open_time)
 );
 
-COMMIT;

@@ -12,7 +12,6 @@
 -- requires-downtime: no
 -- destructive: no
 
-BEGIN;
 
 ALTER TABLE trades SET (
     timescaledb.compress,
@@ -22,4 +21,3 @@ ALTER TABLE trades SET (
 
 SELECT add_compression_policy('trades', INTERVAL '7 days');
 
-COMMIT;

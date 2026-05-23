@@ -8,8 +8,6 @@
 -- requires-downtime: no
 -- destructive: no (policy only; no existing data is dropped at apply time)
 
-BEGIN;
 
 SELECT add_retention_policy('trades', INTERVAL '30 days');
 
-COMMIT;

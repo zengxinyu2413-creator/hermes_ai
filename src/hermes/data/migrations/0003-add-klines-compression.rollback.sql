@@ -6,7 +6,6 @@
 -- destructive: no (rows are preserved; compression metadata and policy are removed)
 -- pre-check: confirm no application writers are running against klines before rollback
 
-BEGIN;
 
 SELECT remove_compression_policy('klines', if_exists => true);
 
@@ -14,4 +13,3 @@ SELECT decompress_chunk(c) FROM show_chunks('klines') c;
 
 ALTER TABLE klines SET (timescaledb.compress = false);
 
-COMMIT;

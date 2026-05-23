@@ -7,7 +7,6 @@
 -- destructive: YES (irreversible data loss for any rows in klines)
 -- pre-check: confirm no application writers are running against klines before rollback
 
-BEGIN;
 
 DROP TABLE IF EXISTS klines;
 
@@ -29,4 +28,3 @@ CREATE TABLE klines (
     PRIMARY KEY (symbol, interval, open_time)
 );
 
-COMMIT;

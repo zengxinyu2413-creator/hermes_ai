@@ -9,7 +9,6 @@
 --              WARNING: decompression is an I/O-intensive operation if compressed chunks exist)
 -- pre-check: confirm no application writers are running against book_tickers before rollback
 
-BEGIN;
 
 SELECT remove_compression_policy('book_tickers', if_exists => true);
 
@@ -17,4 +16,3 @@ SELECT decompress_chunk(c) FROM show_chunks('book_tickers') c;
 
 ALTER TABLE book_tickers SET (timescaledb.compress = false);
 
-COMMIT;
