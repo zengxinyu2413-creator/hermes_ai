@@ -97,3 +97,9 @@ venv-old/
 .env*
 *.env
 infra/.env*
+
+# Allow the binance_nautilus_demo (kept as a wiring reference; see its docstring)
+!experiments/
+experiments/*
+!experiments/binance_nautilus_demo/
+!experiments/binance_nautilus_demo/main.py
