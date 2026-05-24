@@ -16,20 +16,18 @@
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal
 from pathlib import Path
 
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
-from nautilus_trader.model.currencies import SOL, USDT
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import AccountType, OmsType
-from nautilus_trader.model.identifiers import InstrumentId, Symbol, TraderId, Venue
-from nautilus_trader.model.instruments import CurrencyPair
-from nautilus_trader.model.objects import Money, Price, Quantity
+from nautilus_trader.model.identifiers import TraderId, Venue
+from nautilus_trader.model.objects import Money
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 from hermes.adapters.nautilus.binance import build_bar_type, kline_to_bar
+from hermes.adapters.nautilus.instruments import make_solusdt_binance
 from hermes.exchanges.binance_contracts import KlineInterval
 from hermes.exchanges.binance_credentials import BinanceCredentials, BinanceEnvironment
 from hermes.exchanges.binance_rest import BinanceRestClient
@@ -43,36 +41,6 @@ KLINE_LIMIT = 500
 
 _BINANCE = Venue("BINANCE")
 ENV_FILE = Path(__file__).resolve().parents[2] / "infra" / ".env"
-
-
-# ---------------------------------------------------------------------------
-# Instrument
-# ---------------------------------------------------------------------------
-
-def make_solusdt_binance() -> CurrencyPair:
-    return CurrencyPair(
-        instrument_id=InstrumentId(Symbol("SOLUSDT"), _BINANCE),
-        raw_symbol=Symbol("SOLUSDT"),
-        base_currency=SOL,
-        quote_currency=USDT,
-        price_precision=PRICE_PRECISION,
-        size_precision=SIZE_PRECISION,
-        price_increment=Price.from_str("0.01"),
-        size_increment=Quantity.from_str("0.01"),
-        lot_size=None,
-        max_quantity=Quantity.from_str("90000.00"),
-        min_quantity=Quantity.from_str("0.01"),
-        max_notional=None,
-        min_notional=Money.from_str("5.00 USDT"),
-        max_price=Price.from_str("10000.00"),
-        min_price=Price.from_str("0.01"),
-        margin_init=Decimal("1.00"),
-        margin_maint=Decimal("0.35"),
-        maker_fee=Decimal("0.0001"),
-        taker_fee=Decimal("0.0001"),
-        ts_event=0,
-        ts_init=0,
-    )
 
 
 # ---------------------------------------------------------------------------
