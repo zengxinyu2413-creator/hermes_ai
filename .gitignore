@@ -103,3 +103,7 @@ infra/.env*
 experiments/*
 !experiments/binance_nautilus_demo/
 !experiments/binance_nautilus_demo/main.py
+
+# Allow wp4_sma_backtest (M2 closeout backtest reference)
+!experiments/wp4_sma_backtest/
+!experiments/wp4_sma_backtest/main.py
