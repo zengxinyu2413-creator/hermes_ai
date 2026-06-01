@@ -107,3 +107,6 @@ experiments/*
 # Allow wp4_sma_backtest (M2 closeout backtest reference)
 !experiments/wp4_sma_backtest/
 !experiments/wp4_sma_backtest/main.py
+
+# Editor swap/save files
+*.save
