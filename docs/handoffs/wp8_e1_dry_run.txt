@@ -1,0 +1,16 @@
+[E1-DRY] instrument injected: SOLUSDT.BINANCE price_prec=2 size_prec=2
+[E1-DRY] factory constructed: trader=TRADER-000 strategy=E1-PROBE-000
+[E1-DRY] order built: O-20260526-064016-000-000-1 side=BUY type=LIMIT price=1.00 qty=1.00
+[E1-DRY] cache.add_order OK
+[E1-DRY] strategy_id_for_order -> E1-PROBE-000   (核心断言点)
+[E1-DRY] SubmitOrder built: SubmitOrder(client_id=None, trader_id=TRADER-000, strategy_id=E1-PROBE-000, instrument_id=SOLUSDT.BINANCE, client_order_id=O-20260526-064016-000-000-1, order=LimitOrder(BUY 1.00 SOLUSDT.BINANCE LIMIT @ 1.00 GTC, status=INITIALIZED, client_order_id=O-20260526-064016-000-000-1, venue_order_id=None, position_id=None, tags=None), position_id=None, command_id=68091d4c-fdb0-48d7-bd8b-a17e7aa6c5d0, correlation_id=None, ts_init=1779777616534598108)
+[E1-DRY] STOPPING before submit — no network call made
+
+  [1] order_built       : True
+  [2] coid_prefixed     : True
+  [3] add_order_ok      : True
+  [4] strategy_bound    : True
+       strategy_id_for_order == 'E1-PROBE-000'  ← 防陌生订单路径核心
+  [5] command_built     : True
+  [6] no_network        : True
+verdict CLEAN

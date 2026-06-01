@@ -1,0 +1,70 @@
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[REGISTER] 'Portfolio.update_account'  OK
+[REGISTER] 'ExecEngine.process'  OK
+========================================================================
+WP-5 段 B — msgbus endpoint spy 实证
+exec client type : BinanceSpotExecutionClient
+IDLE_SECONDS     : 30
+========================================================================
+
+[START] calling exec_client.start() + connect() ...
+[START] start()+connect() returned (sync; _connect task scheduled)
+
+[VERIFY-RUNNING] is_running : True
+[VERIFY-RUNNING] PASSED
+
+[TASKS] new background tasks spawned : 1
+  '_connect'                      running  BinanceCommonExecutionClient._connect
+
+  [POST-START WS (参考,非权威)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+[IDLE] sleeping 30s — letting _connect full chain run ...
+[IDLE] woke after 30s
+
+[_CONNECT] '_connect' coro=BinanceCommonExecutionClient._connect  done=False  → 30s 后仍运行
+
+[WS-NOTE] PRE-STOP 30s idle 后 —— 权威判定点
+  [PRE-STOP WS (权威判定点)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+[WS-PRIMARY] _client=None  _stream_client=None
+[WS-PRIMARY] ws_primary_ok=False  (WS 属性仍 None — 辅证 FAIL)
+
+[SPY] total messages captured : 1
+  [0] endpoint='Portfolio.update_account'  msg_type=AccountState
+[SPY] spy_ok=True  (主判据达成:_connect 推进到 msgbus 消息到达)
+
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 2 disconnect/teardown task(s) ...
+[STOP] 2 task(s) done, 0 still after 10s timeout
+[STOP] disconnect()+stop() returned
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+[VERIFY-STOPPED] is_running : False
+[VERIFY-STOPPED] PASSED
+
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict 五条件:
+  [1] exit_code==0  : True
+  [2] lingering==0  : True
+  [3] connect_done  : False  (_connect done=True, no exception)
+  [4] ws_primary_ok : False  (_client or _stream_client non-None)
+  [5] spy_ok        : True  (>=1 msg via msgbus.send endpoint)
+verdict=SEE ABOVE  exit_code=0  spy_msgs=1
+报告写入 /tmp/m3_wp5_segment_b.txt
+========================================================================

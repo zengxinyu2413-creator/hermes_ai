@@ -1,0 +1,62 @@
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[SHARED] msgbus id=123973566728512  cache id=1080792832
+[PORTFOLIO] constructed id=123973566794560
+[EXEC-ENGINE] LiveExecutionEngine constructed id=123973568340928
+[REGISTER-CLIENT] exec_engine.register_client OK
+========================================================================
+WP-8 段 E1-wet v2 — PERCENT_PRICE_BY_SIDE-aware 远端限价单 + OrderAccepted 验证
+exec client type : BinanceSpotExecutionClient
+exec engine type : LiveExecutionEngine
+========================================================================
+
+[ENGINE-START] exec_engine.is_running=True
+[START] connect() returned (task scheduled)
+
+[TASKS] new tasks: 4; _connect_task found=True
+[CONNECT-WAIT] awaiting _connect_task (timeout=90s) ...
+[CONNECT-WAIT] _connect_task done cleanly
+[E1-WET-V2] connect + WS auth OK
+
+[E1-WET-V2] real filter: min_qty=0.001 step=0.001 tick=0.01 min_notional=5
+[E1-WET-V2] avg=84.29178912  floor=42.145894560  price=42.15  qty=0.119  notional=5.01585
+[E1-WET-V2] order legal check: notional=5.01585 >= min_notional=5  OK=True
+[E1-WET-V2] strategy_id_for_order -> E1-PROBE-000
+[E1-WET-V2] SUBMITTING (real testnet) ...
+[E1-WET-V2] ACCEPT-POLL order status: INITIALIZED
+[E1-WET-V2] ACCEPT-POLL order status: ACCEPTED
+[E1-WET-V2] venue_order_id: 1040380
+[E1-WET-V2] ACCEPTED confirmed
+[E1-WET-V2] cleanup: cancelling order ...
+[E1-WET-V2] CANCEL-POLL order status: ACCEPTED
+[E1-WET-V2] CANCEL-POLL order status: CANCELED
+[E1-WET-V2] order status after cancel: 8
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 4 teardown task(s) ...
+[STOP] 1 done, 3 still after 10s
+[STOP] exec_client disconnect()+stop() returned
+[ENGINE-KILL] calling exec_engine.kill() ...
+[ENGINE-KILL] exec_engine.kill() returned
+[ENGINE-CLEANUP] awaiting 3 engine task(s) ...
+[ENGINE-CLEANUP] done
+[RESUB-CLEANUP] found 0 resubscribe task(s), cancelling
+[RESUB-CLEANUP] done
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict (CLEAN = [1][2][3][4][6] 全 True；[5] 仅警告):
+  [1] connect_ok        : True
+  [2] order_legal       : True
+  [3] submitted         : True
+  [4] accepted          : True  ← E1 核心目标
+  [5] canceled_cleanup  : True  (仅警告)
+  [6] teardown_clean    : True  (lingering=0)
+verdict=CLEAN  exit_code=0
+报告写入 /tmp/m3_wp8_segment_e1_wet_v2.txt
+========================================================================

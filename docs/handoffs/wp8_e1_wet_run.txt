@@ -1,0 +1,87 @@
+2026-05-26T06:50:48.726796099Z [WARN] TRADER-000.BinanceSpotInstrumentProvider: Not requesting actual trade fees for TESTNET; all instruments will have zero fees
+2026-05-26T06:50:49.338488753Z [ERROR] TRADER-000.Portfolio: Cannot update order: no instrument found for SOLUSDT.BINANCE
+2026-05-26T06:50:49.346092996Z [ERROR] TRADER-000.ExecClient-BINANCE: Failed on submit_order ClientOrderId('O-20260526-065049-000-000-1'): BinanceClientError({'code': -1013, 'msg': 'Filter failure: PERCENT_PRICE_BY_SIDE'})
+2026-05-26T06:50:49.351082618Z [ERROR] TRADER-000.Portfolio: Cannot update order: no instrument found for SOLUSDT.BINANCE
+2026-05-26T06:50:50.338683069Z [WARN] TRADER-000.ExecClient-BINANCE: CancelOrder command for ClientOrderId('O-20260526-065049-000-000-1') when order already REJECTED (will not send to exchange)
+2026-05-26T06:51:05.357388899Z [WARN] TRADER-000.BinanceUserDataWebSocketClient: Received eventStreamTerminated, resubscribing...
+2026-05-26T06:51:05.369025448Z [WARN] TRADER-000.BinanceUserDataWebSocketClient: Resubscribed after stream termination
+2026-05-26T06:51:15.359612124Z [WARN] TRADER-000.ExecEngine: Killing engine
+2026-05-26T06:51:15.359895681Z [WARN] TRADER-000.ExecEngine: Canceled task 'run_cmd_queue'
+2026-05-26T06:51:15.359925529Z [WARN] TRADER-000.ExecEngine: Canceled task 'run_evt_queue'
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[SHARED] msgbus id=134494167705408  cache id=751596944
+[PORTFOLIO] constructed id=134494288734016
+[EXEC-ENGINE] LiveExecutionEngine constructed id=134494288292096
+[REGISTER-CLIENT] exec_engine.register_client OK
+========================================================================
+WP-8 段 E1-wet — 真 testnet 挂远端限价单 + OrderAccepted 验证
+exec client type : BinanceSpotExecutionClient
+exec engine type : LiveExecutionEngine
+========================================================================
+
+[ENGINE-START] exec_engine.is_running=True
+[START] connect() returned (task scheduled)
+
+[TASKS] new tasks: 4; _connect_task found=True
+[CONNECT-WAIT] awaiting _connect_task (timeout=90s) ...
+[CONNECT-WAIT] _connect_task done cleanly
+[E1-WET] connect + WS auth OK
+
+[E1-WET] real filter: min_qty=0.001 step=0.001 tick=0.01 min_notional=5
+[E1-WET] order built: price=1.00 qty=5 notional=5.00 (min_notional=5  OK=True)
+[E1-WET] strategy_id_for_order -> E1-PROBE-000
+[E1-WET] SUBMITTING (real testnet) ...
+[E1-WET] ACCEPT-POLL order status: INITIALIZED
+[E1-WET] ACCEPT-POLL order status: REJECTED
+[E1-WET] venue_order_id: None
+[E1-WET] ACCEPTED not reached — final status: 7
+[E1-WET] cleanup: cancelling order ...
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] CANCEL-POLL order status: REJECTED
+[E1-WET] order status after cancel: 7
+[WARN] cleanup cancel did not confirm CANCELED (non-fatal)
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 4 teardown task(s) ...
+[STOP] 1 done, 3 still after 10s
+[STOP] exec_client disconnect()+stop() returned
+[ENGINE-KILL] calling exec_engine.kill() ...
+[ENGINE-KILL] exec_engine.kill() returned
+[ENGINE-CLEANUP] awaiting 3 engine task(s) ...
+[ENGINE-CLEANUP] done
+[RESUB-CLEANUP] found 0 resubscribe task(s), cancelling
+[RESUB-CLEANUP] done
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict (CLEAN = [1][2][3][4][6] 全 True；[5] 仅警告):
+  [1] connect_ok        : True
+  [2] order_legal       : True
+  [3] submitted         : False
+  [4] accepted          : False  ← E1 核心目标
+  [5] canceled_cleanup  : False  (仅警告)
+  [6] teardown_clean    : True  (lingering=0)
+verdict=SEE ABOVE  exit_code=0
+报告写入 /tmp/m3_wp8_segment_e1_wet.txt
+========================================================================
+
+[报告已写入 /tmp/m3_wp8_segment_e1_wet.txt]

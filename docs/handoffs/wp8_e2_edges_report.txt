@@ -1,0 +1,79 @@
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[CONFIG] SKIP_B2 = False
+[SHARED] msgbus id=123263377803392  cache id=1051025088
+[PORTFOLIO] constructed id=123263377886016
+[EXEC-ENGINE] LiveExecutionEngine constructed id=123263377302464
+[REGISTER-CLIENT] exec_engine.register_client OK
+========================================================================
+WP-8 段 E2-edges — 撤单边角验证 (B1=cancel-before-accept, B2=cancel-after-filled)
+exec client type : BinanceSpotExecutionClient
+exec engine type : LiveExecutionEngine
+========================================================================
+
+[ENGINE-START] exec_engine.is_running=True
+[START] connect() returned (task scheduled)
+
+[TASKS] new tasks: 4; _connect_task found=True
+[CONNECT-WAIT] awaiting _connect_task (timeout=90s) ...
+[CONNECT-WAIT] _connect_task done cleanly
+[E2] connect_ok=True
+
+[E2] filter: min_qty=0.001 step=0.001 tick=0.01 min_notional=5
+[E2] avg=84.18975903 floor=42.094879515 price=42.10 qty=0.119
+
+────────────────────────────────────────────────────────────────────────
+[B1] cancel-before-accept: submit → sleep 0.1s → cancel
+────────────────────────────────────────────────────────────────────────
+[B1] order coid=O-20260526-074440-000-000-1  strategy=E2-PROBE-000
+[B1] SUBMITTING ...
+[B1] AT-CANCEL  venue_oid=1040751  status=6
+[B1] cancel_order returned
+[E2] B1-TERMINAL-POLL order status: ACCEPTED
+[E2] B1-TERMINAL-POLL order status: CANCELED
+[B1] terminal status: 8
+
+────────────────────────────────────────────────────────────────────────
+[B2] cancel-after-filled  (SKIP_B2=False)
+────────────────────────────────────────────────────────────────────────
+[B2] market BUY qty=0.060  est_notional=5.05138554180  (基于 avg=84.18975903)
+[B2] order coid=O-20260526-074441-000-000-2  strategy=E2-PROBE-000
+[B2] SUBMITTING market BUY (testnet 余额会扣) ...
+[E2] B2-FILL-POLL order status: INITIALIZED
+[E2] B2-FILL-POLL order status: FILLED
+[B2] post-submit status: 14
+[B2] cancelling ALREADY-FILLED order (should be no-op/rejected) ...
+[B2] post-cancel status (expected FILLED): 14
+
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 4 teardown task(s) ...
+[STOP] 1 done, 3 still after 10s
+[STOP] exec_client disconnect()+stop() returned
+[ENGINE-KILL] calling exec_engine.kill() ...
+[ENGINE-KILL] exec_engine.kill() returned
+[ENGINE-CLEANUP] awaiting 3 engine task(s) ...
+[ENGINE-CLEANUP] done
+[RESUB-CLEANUP] found 0 resubscribe task(s), cancelling
+[RESUB-CLEANUP] done
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict (CLEAN = connect + B1 三条 + (SKIP_B2 or B2 四条) + teardown 全 True):
+  [conn] connect_ok               : True
+  [B1.1] b1_submit_done           : True
+  [B1.2] b1_cancel_command_sent   : True
+  [B1.3] b1_terminal_reached      : True  (status=8)
+  [B2.1] b2_market_submitted      : True
+  [B2.2] b2_fill_reached          : True
+  [B2.3] b2_cancel_sent           : True
+  [B2.4] b2_cancel_was_noop       : True  (post=14)
+  [T]    teardown_clean           : True  (lingering=0)
+verdict=CLEAN  exit_code=0
+报告写入 /tmp/m3_wp8_segment_e2_edges.txt
+========================================================================

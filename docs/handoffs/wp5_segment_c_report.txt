@@ -1,0 +1,71 @@
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[REGISTER] 'Portfolio.update_account'  OK
+[REGISTER] 'ExecEngine.process'  OK
+========================================================================
+WP-5 段 C — F2 验证: instrument_provider=InstrumentProviderConfig(load_all=True)
+exec client type : BinanceSpotExecutionClient
+IDLE_SECONDS     : 60  (段 B 为 30;60s 不够转 F1,不调参)
+========================================================================
+
+[START] calling exec_client.start() + connect() ...
+[START] start()+connect() returned (sync; _connect task scheduled)
+
+[VERIFY-RUNNING] is_running : True
+[VERIFY-RUNNING] PASSED
+
+[TASKS] new background tasks spawned : 1
+  '_connect'                      running  BinanceCommonExecutionClient._connect
+
+  [POST-START WS (参考,非权威)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+[IDLE] sleeping 60s — letting _connect full chain run ...
+[IDLE] woke after 60s
+
+[_CONNECT] '_connect' coro=BinanceCommonExecutionClient._connect  done=True  cancelled=False
+[_CONNECT] exception=RuntimeError: RuntimeError('Account BINANCE-SPOT-master not registered in cache after 30.0s timeout')
+
+[WS-NOTE] PRE-STOP 60s idle 后 —— 权威判定点
+  [PRE-STOP WS (权威判定点)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+[WS-PRIMARY] _client=None  _stream_client=None
+[WS-PRIMARY] ws_primary_ok=False  (WS 属性仍 None — 次门 FAIL)
+
+[SPY] total messages captured : 1  (旁证,不阻 CLEAN)
+  [0] endpoint='Portfolio.update_account'  msg_type=AccountState
+[SPY] spy_ok=True  (旁证有消息)
+
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 1 disconnect/teardown task(s) ...
+[STOP] 1 task(s) done, 0 still after 10s timeout
+[STOP] disconnect()+stop() returned
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+[VERIFY-STOPPED] is_running : False
+[VERIFY-STOPPED] PASSED
+
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict 条件(段 C: CLEAN = [1][2][3][4]; [5] 为旁证不阻 CLEAN):
+  [1] exit_code==0  : True
+  [2] lingering==0  : True
+  [3] connect_done  : False  (_connect done=True, no exception)  ← F2 主判据
+  [4] ws_primary_ok : False  (_client or _stream_client non-None)  ← F2 次门
+  [5] spy_ok [旁证]  : True  (>=1 msg via msgbus.send endpoint)
+verdict=SEE ABOVE  exit_code=0  spy_msgs=1
+报告写入 /tmp/m3_wp5_segment_c.txt
+========================================================================

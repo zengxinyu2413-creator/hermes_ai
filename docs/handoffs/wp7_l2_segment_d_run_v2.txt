@@ -1,0 +1,94 @@
+2026-05-26T02:34:23.680999906Z [WARN] TRADER-000.BinanceSpotInstrumentProvider: Not requesting actual trade fees for TESTNET; all instruments will have zero fees
+2026-05-26T02:35:23.694095170Z [WARN] TRADER-000.BinanceUserDataWebSocketClient: Received eventStreamTerminated, resubscribing...
+2026-05-26T02:35:23.705991580Z [WARN] TRADER-000.BinanceUserDataWebSocketClient: Resubscribed after stream termination
+2026-05-26T02:35:33.699819566Z [WARN] TRADER-000.ExecEngine: Killing engine
+2026-05-26T02:35:33.700002690Z [WARN] TRADER-000.ExecEngine: Canceled task 'run_cmd_queue'
+2026-05-26T02:35:33.700016777Z [WARN] TRADER-000.ExecEngine: Canceled task 'run_evt_queue'
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[SHARED] msgbus id=133988178011968  cache id=71083328  (共享对象,后续传给所有组件)
+[PORTFOLIO] Portfolio constructed, id=133988298938688
+[EXEC-ENGINE] MockLiveExecutionEngine constructed, id=133988300909472
+[REGISTER-CLIENT] exec_engine.register_client(exec_client) OK
+========================================================================
+WP-6 段 D — F4 验证:共享 msgbus/cache + Portfolio + MockLiveExecutionEngine
+exec client type : BinanceSpotExecutionClient
+exec engine type : MockLiveExecutionEngine
+IDLE_SECONDS     : 60  (60s,F4 修复后预期远早于此 done)
+========================================================================
+
+[ENGINE-START] calling exec_engine.start() ...
+[ENGINE-START] exec_engine.is_running : True
+
+[START] calling exec_client.connect() ...
+[START] connect() returned (sync; _connect task scheduled)
+
+[VERIFY-RUNNING] is_running : True
+[VERIFY-RUNNING] PASSED
+
+[TASKS] new background tasks spawned : 4
+  '_connect'                      running  BinanceCommonExecutionClient._connect
+  'cmd_queue'                     running  LiveExecutionEngine._run_cmd_queue
+  'continuous_reconciliation'     running  LiveExecutionEngine._continuous_reconciliation_loop
+  'evt_queue'                     running  LiveExecutionEngine._run_evt_queue
+
+  [POST-START WS (参考,非权威)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+[IDLE] sleeping 60s — letting _connect full chain run ...
+[IDLE] woke after 60s
+
+[_CONNECT] '_connect' coro=BinanceCommonExecutionClient._connect  done=True  cancelled=False
+[_CONNECT] exception=None → 任务正常完成
+
+[F4-DIAG] account_id=BINANCE-SPOT-master
+[F4-DIAG] account_in_cache: True  (诊断,不进 CLEAN)
+[F4-DIAG] cache.account() returned: CashAccount(id=BINANCE-SPOT-master, type=CASH, base=None)
+
+[WS-NOTE] PRE-STOP 60s idle 后 —— 权威判定点
+  [PRE-STOP WS (权威判定点)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : <nautilus_trader.core.nautilus_pyo3.network.WebSocketClient object at 0x79dc94e8bb10>
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : True
+[WS-PRIMARY] _client=<nautilus_trader.core.nautilus_pyo3.network.WebSocketClient object at 0x79dc94e8bb10>  _stream_client=None
+[WS-PRIMARY] ws_primary_ok=True  (WS 物理已连(次门 OK))
+
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 4 disconnect/teardown task(s) ...
+[STOP] 1 task(s) done, 3 still after 10s timeout
+[STOP] exec_client disconnect()+stop() returned
+[ENGINE-KILL] calling exec_engine.kill() ...
+[ENGINE-KILL] exec_engine.kill() returned
+[ENGINE-CLEANUP] awaiting 3 engine task(s) ...
+[ENGINE-CLEANUP] done
+[RESUB-CLEANUP] found 0 resubscribe task(s), cancelling
+[RESUB-CLEANUP] done
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+[VERIFY-STOPPED] exec_client.is_running : False
+[VERIFY-STOPPED] PASSED
+[VERIFY-STOPPED] exec_engine.is_running : False
+
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict 主门(CLEAN = [1] and [2] and [3] and [4]):
+  [1] exit_code==0  : True   (守门)
+  [2] lingering==0  : True   (守门)
+  [3] connect_done  : True   (主门:F4 隐含证据)
+  [4] ws_primary_ok : True   (次门:WS 物理连接)
+verdict=CLEAN  exit_code=0
+报告写入 /tmp/m3_wp6_segment_d.txt
+========================================================================
+
+[报告已写入 /tmp/m3_wp6_segment_d.txt]

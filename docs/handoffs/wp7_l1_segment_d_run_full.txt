@@ -1,0 +1,99 @@
+2026-05-26T01:44:42.536249600Z [ERROR] TRADER-000.ExecClient-BINANCE: InvalidStateTrigger('RUNNING -> START') state RUNNING
+2026-05-26T01:44:42.536267204Z [ERROR] TRADER-000.ExecClient-BINANCE: InvalidStateTrigger('RUNNING -> START_COMPLETED') state RUNNING
+2026-05-26T01:44:42.536495634Z [WARN] TRADER-000.BinanceSpotInstrumentProvider: Not requesting actual trade fees for TESTNET; all instruments will have zero fees
+2026-05-26T01:45:42.597517783Z [WARN] TRADER-000.BinanceUserDataWebSocketClient: Received eventStreamTerminated, resubscribing...
+2026-05-26T01:45:52.601789421Z [WARN] TRADER-000.ExecEngine: Killing engine
+2026-05-26T01:45:52.601904203Z [ERROR] TRADER-000.ExecEngine: InvalidStateTrigger('STOPPED -> STOP') state STOPPED
+2026-05-26T01:45:52.601909923Z [ERROR] TRADER-000.ExecEngine: InvalidStateTrigger('STOPPED -> STOP_COMPLETED') state STOPPED
+2026-05-26T01:45:52.602142753Z [WARN] TRADER-000.ExecEngine: Canceled task 'run_cmd_queue'
+2026-05-26T01:45:52.602156699Z [WARN] TRADER-000.ExecEngine: Command message queue stopped with 1 message(s) on queue
+2026-05-26T01:45:52.602185525Z [WARN] TRADER-000.ExecEngine: Canceled task 'run_evt_queue'
+2026-05-26T01:45:52.602189122Z [WARN] TRADER-000.ExecEngine: Event message queue stopped with 1 message(s) on queue
+[LOGGING] NT logging initialized: WARNING+, stdout, no color
+[SHARED] msgbus id=132275528968000  cache id=488955072  (共享对象,后续传给所有组件)
+[PORTFOLIO] Portfolio constructed, id=132275650074944
+[EXEC-ENGINE] MockLiveExecutionEngine constructed, id=132275652029344
+[REGISTER-CLIENT] exec_engine.register_client(exec_client) OK
+========================================================================
+WP-6 段 D — F4 验证:共享 msgbus/cache + Portfolio + MockLiveExecutionEngine
+exec client type : BinanceSpotExecutionClient
+exec engine type : MockLiveExecutionEngine
+IDLE_SECONDS     : 60  (60s,F4 修复后预期远早于此 done)
+========================================================================
+
+[ENGINE-START] calling exec_engine.start() ...
+[ENGINE-START] exec_engine.is_running : True
+
+[START] calling exec_client.start() + connect() ...
+[START] start()+connect() returned (sync; _connect task scheduled)
+
+[VERIFY-RUNNING] is_running : True
+[VERIFY-RUNNING] PASSED
+
+[TASKS] new background tasks spawned : 4
+  '_connect'                      running  BinanceCommonExecutionClient._connect
+  'cmd_queue'                     running  LiveExecutionEngine._run_cmd_queue
+  'continuous_reconciliation'     running  LiveExecutionEngine._continuous_reconciliation_loop
+  'evt_queue'                     running  LiveExecutionEngine._run_evt_queue
+
+  [POST-START WS (参考,非权威)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+[IDLE] sleeping 60s — letting _connect full chain run ...
+[IDLE] woke after 60s
+
+[_CONNECT] '_connect' coro=BinanceCommonExecutionClient._connect  done=True  cancelled=False
+[_CONNECT] exception=None → 任务正常完成
+
+[F4-DIAG] account_id=BINANCE-SPOT-master
+[F4-DIAG] account_in_cache: True  (诊断,不进 CLEAN)
+[F4-DIAG] cache.account() returned: CashAccount(id=BINANCE-SPOT-master, type=CASH, base=None)
+
+[WS-NOTE] PRE-STOP 60s idle 后 —— 权威判定点
+  [PRE-STOP WS (权威判定点)]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : <nautilus_trader.core.nautilus_pyo3.network.WebSocketClient object at 0x784dd3147c90>
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : True
+[WS-PRIMARY] _client=<nautilus_trader.core.nautilus_pyo3.network.WebSocketClient object at 0x784dd3147c90>  _stream_client=None
+[WS-PRIMARY] ws_primary_ok=True  (WS 物理已连(次门 OK))
+
+[STOP] calling exec_client.disconnect() + stop() ...
+[STOP] awaiting 4 disconnect/teardown task(s) ...
+[STOP] 1 task(s) done, 3 still after 10s timeout
+[STOP] exec_client disconnect()+stop() returned
+[ENGINE-STOP] calling exec_engine.stop() ...
+[ENGINE-STOP] exec_engine.stop() returned
+[ENGINE-KILL] calling exec_engine.kill() ...
+[ENGINE-KILL] exec_engine.kill() returned
+[RESUB-CLEANUP] found 1 resubscribe task(s), cancelling
+[RESUB-CLEANUP] done
+[POST-STOP] asyncio tasks total   : 1
+[POST-STOP] lingering (above base) : 0
+[VERIFY-STOPPED] exec_client.is_running : False
+[VERIFY-STOPPED] PASSED
+[VERIFY-STOPPED] exec_engine.is_running : False
+
+  [POST-STOP WS]
+    _ws_client type        : BinanceUserDataWebSocketClient
+    _ws_client._client             : None
+    _ws_client._stream_client      : None
+    _ws_client._keepalive_task     : None
+    _ws_client.is_authenticated    : False
+
+========================================================================
+verdict 主门(CLEAN = [1] and [2] and [3] and [4]):
+  [1] exit_code==0  : True   (守门)
+  [2] lingering==0  : True   (守门)
+  [3] connect_done  : True   (主门:F4 隐含证据)
+  [4] ws_primary_ok : True   (次门:WS 物理连接)
+verdict=CLEAN  exit_code=0
+报告写入 /tmp/m3_wp6_segment_d.txt
+========================================================================
+
+[报告已写入 /tmp/m3_wp6_segment_d.txt]
