@@ -177,6 +177,23 @@ LC-EXEC-3 收口为「证伪调查」——这类任务最易把不方便的 FAL
 
 配套防呆（硬性）：证伪判据须由出题人预先定死 FV 条件（全 True 才证伪成立），杜绝答题人事后凑 moot。证伪不成立（任一 FV=False/UNKNOWN）须如实转实修或记账，不得为「清雷」反推 moot。
 
+## §6.6 GATE-1：git 写闸（配置级强制，2026-06-01 落地）
+
+**背景**：§2.29 / 6b10968 / 5b89c66 连续 3 次 STOP-DOCS-SKIP——plan 均写"出预览停住等 go"，工具放行后同轮即把 commit 跑了。结论：靠本文件写规矩拦不住，唯一真闸是把 git 写操作移出 CC 自动执行。
+
+**机制**（用户级 `~/.claude/`，不在本 repo 内，环境重建须重新施加）：
+- 主闸：PreToolUse hook `~/.claude/hooks/git-write-gate.sh`（matcher=Bash），命中 git 写动词（add / commit / push / reset / restore / rm / mv / stash / merge / rebase / cherry-pick / revert / tag / clean / pull）即返回 permissionDecision=deny。官方文档：hook 的 deny 连 `--dangerously-skip-permissions` / bypass 都拦得住。
+- 副闸：`~/.claude/settings.json` 的 `permissions.deny`（同上 15 条动词）。deny 清单在 bypass 下会被跳过，故以 hook 为准。
+- 读类 git（status / log / diff / show）不拦。
+
+**效果**：CC 物理上无法 git add / commit / push；commit / push 只由主理人手敲。
+
+**验证（GATE-1 CLEAN，复核方 2026-06-01 签）**：deny 清单 15 条；真 commit（`git commit --allow-empty`）被 GIT-WRITE-GATE deny、未执行、HEAD 仍 5b89c66；只读 git 放行、工作树 clean；hook 可执行。dry-run 不充当判据（hook 对 dry-run 与真写可能有差异），故以真 commit + HEAD 未动为铁证。
+
+**两条带走（后续发单闸用）**：
+1. hook 是真背板（盖过 bypass），deny 清单是 belt（bypass 下失效）。
+2. hook 的 deny 对 MCP 工具调用不生效（claude-code #33106）。若 testnet / live 下单走 MCP 工具而非 Bash 跑 python，此 hook 拦不住，发单闸须另设。
+
 ## §12. 双轨制(出题人 ≠ 答题人)
 
 本项目核心制衡:verdict 判据的出题权与达标权分离。网页 Claude = 出题人 / 复核方,Claude Code = 答题人 / 执行方,用户 = 终审。§6.4 是本原则的逐轮操作细则;本节是其总原则。任何一方不得同时出题又自判达标。
