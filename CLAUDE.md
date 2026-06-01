@@ -194,6 +194,21 @@ LC-EXEC-3 收口为「证伪调查」——这类任务最易把不方便的 FAL
 1. hook 是真背板（盖过 bypass），deny 清单是 belt（bypass 下失效）。
 2. hook 的 deny 对 MCP 工具调用不生效（claude-code #33106）。若 testnet / live 下单走 MCP 工具而非 Bash 跑 python，此 hook 拦不住，发单闸须另设。
 
+## §6.7 会话启动复验协议（GATE-1 自检，2026-06-01 建立）
+
+**为何**：GATE-1 的闸体（hook + settings.json）在用户级 `~/.claude/`，不随本 repo 走。换机 / 环境重建 / 不同用户 = 闸可能不在。且"配过"不等于"正在拦"（deny 清单会被 bypass 跳过、可能漏到 ask）。故每次新 CC 会话、动任何 git 写相邻的活之前，须以行为方式复验闸仍物理有效。
+
+**何时**：每个新 CC 会话开工前，尤其在任何 docs / commit 工作或 Category B 之前。
+
+**怎么验（决定性、行为级）**：
+1. 记基线：`git rev-parse --short HEAD`。
+2. CC 尝试真 git 写：`git commit --allow-empty -m GATE_SELFTEST_DROP`。
+3. 判定：被 `GIT-WRITE-GATE` deny、未执行、且 HEAD 仍 == 基线 → 闸活，放行；commit 落地 / HEAD 前进 → 闸 down，按下方处置。
+
+**闸 down 处置**：① STOP，任何 git 写相邻工作不准动；② 主理人手敲 `git reset --hard HEAD~1` 丢掉自检空提交；③ 按 §6.6 重新施加 hook + settings；④ 复验通过才继续。
+
+**注**：dry-run（`-n` / `--dry-run`）不充当判据——同 §6.6，须真 commit + HEAD 未动为铁证。
+
 ## §12. 双轨制(出题人 ≠ 答题人)
 
 本项目核心制衡:verdict 判据的出题权与达标权分离。网页 Claude = 出题人 / 复核方,Claude Code = 答题人 / 执行方,用户 = 终审。§6.4 是本原则的逐轮操作细则;本节是其总原则。任何一方不得同时出题又自判达标。
