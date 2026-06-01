@@ -25,7 +25,8 @@ only contains the lifecycle scaffolding — no HTTP requests yet.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -293,7 +294,80 @@ class BinanceRestClient:
 
         Endpoint: GET /api/v3/ping (public, no auth, weight 1)
         """
-        return await self._request("GET", "/api/v3/ping")    
+        return await self._request("GET", "/api/v3/ping")
+
+    async def new_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: Decimal,
+        *,
+        price: Decimal | None = None,
+        time_in_force: str = "GTC",
+        new_client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Place a new Spot order on Binance.
+
+        Endpoint: POST /api/v3/order (signed, weight 1)
+
+        Args:
+            symbol: Trading pair, e.g. "SOLUSDT". Upper-cased automatically.
+            side: "BUY" or "SELL".
+            order_type: "MARKET" or "LIMIT".
+            quantity: Order quantity. Must be a Decimal > 0 (float rejected).
+            price: Limit price. Required for LIMIT; must be None for MARKET.
+            time_in_force: "GTC", "IOC", or "FOK". LIMIT only.
+            new_client_order_id: Optional caller-assigned order ID.
+
+        Returns:
+            Raw Binance order response dict (orderId, status, fills, ...).
+
+        Raises:
+            ValueError: Parameter invalid — checked before any network call.
+            BinanceAPIError: Binance-side rejection (insufficient balance, etc.).
+        """
+        # --- Validate all inputs before touching the network -----------------
+        if side not in {"BUY", "SELL"}:
+            raise ValueError(f"side must be 'BUY' or 'SELL', got {side!r}")
+        if order_type not in {"MARKET", "LIMIT"}:
+            raise ValueError(f"order_type must be 'MARKET' or 'LIMIT', got {order_type!r}")
+        if not isinstance(quantity, Decimal) or quantity <= 0:
+            raise ValueError(f"quantity must be a positive Decimal, got {quantity!r}")
+        if order_type == "LIMIT":
+            if price is None or not isinstance(price, Decimal) or price <= 0:
+                raise ValueError("LIMIT order requires a positive Decimal price")
+            if time_in_force not in {"GTC", "IOC", "FOK"}:
+                raise ValueError(
+                    f"time_in_force must be 'GTC', 'IOC', or 'FOK', got {time_in_force!r}"
+                )
+        if order_type == "MARKET" and price is not None:
+            raise ValueError("MARKET order must not include a price")
+
+        # --- Build params ----------------------------------------------------
+        # format(d, 'f') avoids scientific notation: Decimal("1E-8") -> "0.00000001"
+        # str() gives "1E-8" which Binance rejects; normalize() gives "1E+2" for 100.
+        params: dict[str, str | int] = {
+            "symbol": symbol.upper(),
+            "side": side,
+            "type": order_type,
+            "quantity": format(quantity, "f"),
+        }
+        if order_type == "LIMIT":
+            assert price is not None  # narrowing — validated above
+            params["price"] = format(price, "f")
+            params["timeInForce"] = time_in_force
+        if new_client_order_id is not None:
+            params["newClientOrderId"] = new_client_order_id
+
+        # max_retries=0: order submission must never auto-retry (duplicate order risk).
+        # timestamp / recvWindow / signature are injected by _request(signed=True).
+        result = await self._request(
+            "POST", "/api/v3/order", params=params, signed=True, max_retries=0
+        )
+        assert isinstance(result, dict)
+        return result
+
     # --- HTTP request engine ------------------------------------------------
 
     async def _request(

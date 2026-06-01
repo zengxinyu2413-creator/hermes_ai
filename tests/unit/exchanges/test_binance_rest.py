@@ -990,4 +990,202 @@ class TestGetKlinesMock:
         finally:
             await client.aclose()
 
-        assert exc_info.value.code == -1                          
+        assert exc_info.value.code == -1
+
+
+# ============================================================================
+# new_order() tests — mock transport, all validation before network
+# ============================================================================
+
+class TestNewOrderMock:
+    """new_order: POST /api/v3/order — signed, max_retries=0, no real network."""
+
+    @pytest.mark.asyncio
+    async def test_market_buy_post_to_order_endpoint_signed(self):
+        """MARKET BUY: method=POST, path=/api/v3/order, signed params present,
+        no price, no timeInForce in query."""
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["method"] = request.method
+            seen["path"] = request.url.path
+            seen["query"] = dict(parse_qs(urlparse(str(request.url)).query))
+            return httpx.Response(200, json={"orderId": 1, "status": "FILLED"})
+
+        client = _build_mock_client(handler)
+        try:
+            result = await client.new_order("solusdt", "BUY", "MARKET", _Decimal("1.5"))
+        finally:
+            await client.aclose()
+
+        assert seen["method"] == "POST"
+        assert seen["path"] == "/api/v3/order"
+        q = seen["query"]
+        assert "timestamp" in q
+        assert "recvWindow" in q
+        assert "signature" in q
+        assert q["type"] == ["MARKET"]
+        assert q["side"] == ["BUY"]
+        assert q["symbol"] == ["SOLUSDT"]
+        assert "price" not in q
+        assert "timeInForce" not in q
+        assert isinstance(result, dict)
+        assert result["orderId"] == 1
+
+    @pytest.mark.asyncio
+    async def test_limit_sell_includes_price_and_time_in_force(self):
+        """LIMIT SELL: params contain price and timeInForce=GTC."""
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = dict(parse_qs(urlparse(str(request.url)).query))
+            return httpx.Response(200, json={"orderId": 2, "status": "NEW"})
+
+        client = _build_mock_client(handler)
+        try:
+            await client.new_order(
+                "BTCUSDT", "SELL", "LIMIT", _Decimal("0.01"),
+                price=_Decimal("50000.00"),
+            )
+        finally:
+            await client.aclose()
+
+        q = seen["query"]
+        assert q["type"] == ["LIMIT"]
+        assert q["side"] == ["SELL"]
+        assert "price" in q
+        assert q["timeInForce"] == ["GTC"]
+
+    @pytest.mark.asyncio
+    async def test_small_quantity_not_scientific_notation(self):
+        """quantity=Decimal('0.00000001') must arrive as '0.00000001', not '1E-8'."""
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = dict(parse_qs(urlparse(str(request.url)).query))
+            return httpx.Response(200, json={"orderId": 3})
+
+        client = _build_mock_client(handler)
+        try:
+            await client.new_order(
+                "ETHUSDT", "BUY", "MARKET", _Decimal("0.00000001")
+            )
+        finally:
+            await client.aclose()
+
+        assert seen["query"]["quantity"] == ["0.00000001"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_side_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; side validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.new_order("SOLUSDT", "LONG", "MARKET", _Decimal("1"))
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_invalid_order_type_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; order_type validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.new_order("SOLUSDT", "BUY", "STOP", _Decimal("1"))
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_zero_quantity_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; quantity=0 validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.new_order("SOLUSDT", "BUY", "MARKET", _Decimal("0"))
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_float_quantity_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; float quantity validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.new_order(
+                    "SOLUSDT", "BUY", "MARKET", 1.5  # type: ignore[arg-type]
+                )
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_limit_without_price_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; LIMIT price validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.new_order("SOLUSDT", "BUY", "LIMIT", _Decimal("1"))
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_market_with_price_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; MARKET+price validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.new_order(
+                    "SOLUSDT", "BUY", "MARKET", _Decimal("1"),
+                    price=_Decimal("100"),
+                )
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_binance_rejection_raises_binance_api_error(self):
+        """Binance 4xx + error envelope must propagate as BinanceAPIError."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                400, json={"code": -2010, "msg": "Account has insufficient balance."}
+            )
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(BinanceAPIError) as exc_info:
+                await client.new_order("BTCUSDT", "BUY", "MARKET", _Decimal("0.001"))
+        finally:
+            await client.aclose()
+
+        assert exc_info.value.code == -2010
+        assert exc_info.value.http_status == 400
+
+    @pytest.mark.asyncio
+    async def test_new_client_order_id_included_in_params(self):
+        """Optional new_client_order_id must appear as newClientOrderId in query."""
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = dict(parse_qs(urlparse(str(request.url)).query))
+            return httpx.Response(200, json={"orderId": 99, "clientOrderId": "my-id-123"})
+
+        client = _build_mock_client(handler)
+        try:
+            await client.new_order(
+                "SOLUSDT", "BUY", "MARKET", _Decimal("1"),
+                new_client_order_id="my-id-123",
+            )
+        finally:
+            await client.aclose()
+
+        assert seen["query"]["newClientOrderId"] == ["my-id-123"]
