@@ -234,6 +234,24 @@ SS6.8.1 mainnet 硬拦（已建 + 验 CLEAN + 落档）
 - known limitations（不阻塞，记录在案）：(1) 间接变量 X=mainnet; HERMES_ENV=$X；
   (2) os.putenv/setdefault/update；(3) deny 对 MCP 工具不生效（#33106；当前无 MCP，不适用）。
 
+
+SS6.8.1-G3 GATE-3 trade-live 发单闸（预埋；能力存在前先建，复核方 2026-06-01 签）
+- 定位：守 SS6.8.2(1) 的唯一发单入口 hermes trade-live。在 CLI/exec 层接入前预埋，
+  能力一旦出现即被拦。Telegram 仅只读，发单收口到此单一子命令。
+- 闸体（用户级 ~/.claude/，不随 repo，环境重建须重施）：
+  - hook：~/.claude/hooks/trade-gate.sh，md5 c9c4cbb0daf4299c62c391f26786614c。
+    primary grep hermes[[:space:]]+trade-live（-Eiq），命中即 permissionDecision=deny。
+  - settings：~/.claude/settings.json 更新为 md5 625c1a96856b32a9c50534f18305c9ef，
+    deny 数组 18 条（15 git + 2 mainnet + 1 Bash(hermes trade-live:*)），
+    hooks.PreToolUse[matcher=Bash] 三 hook 并存（git-write-gate + mainnet-gate + trade-gate，追加非替换）。
+    旧 settings md5 b07a03a1cd0df1501eceb6dff81e88df 已作废，以此为准。
+- 验闸 CLEAN 铁证（CC 主体）：G3 hermes trade-live --dry 被 TRADE-GATE deny（非 crash 兜底）；
+  G2 回归 HERMES_ENV=mainnet echo 被 MAINNET-GATE deny；G1 回归 git commit --allow-empty
+  被 GIT-WRITE-GATE deny、HB==HA==701cae6；控制组 HERMES_ENV=testnet echo OK 放行。
+- known limitation：只读里 hermes trade-live 字面串（如 grep）会被误拦，无害，拆串绕过。
+- 注：此闸守命令入口；E2.5-a 实现 new_order 时另须确认 new_order 默认 testnet、收口到此入口、
+  Telegram 进程不 import 发单路径（SS6.8.2 验收判据）。
+
 SS6.8.2 exec 入口收口硬判据（前瞻；CLI/exec 层未建，落为构建期契约 = E2.5 签 go 前置）
 - 证伪铁证：CLI 模块物理不存在 —— ls src/hermes/cli.py + ls src/hermes/cli
   双 No such file or directory；entry point hermes = "hermes.cli:main"
