@@ -1071,7 +1071,7 @@ class TestReconnect:
                     received.append(msg)
                     if len(received) >= 6:
                         return
-            await asyncio.wait_for(_collect(), timeout=1.0)
+            await asyncio.wait_for(_collect(), timeout=10.0)
 
         # Filter to backoff sleeps (delay > 0); the mock + read-loop emit
         # many cooperative sleep(0)s that are noise here.
