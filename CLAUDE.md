@@ -209,6 +209,49 @@ LC-EXEC-3 收口为「证伪调查」——这类任务最易把不方便的 FAL
 
 **注**：dry-run（`-n` / `--dry-run`）不充当判据——同 §6.6，须真 commit + HEAD 未动为铁证。
 
+
+SS6.8 发单闸（GATE-2 / WP-8）  复核方 2026-06-01 签
+
+SS6.8.1 mainnet 硬拦（已建 + 验 CLEAN + 落档）
+- 定位：defense-in-depth 一层，非唯一防线。真 backstop 是 config 层默认 TESTNET
+  （core/config.py:46 alias，不显式设永远 testnet）。闸只拦"主动把 env 设成 mainnet"
+  这个显式误触动作。不给"实盘绝无可能误触"的虚假安全感。
+- 闸体（用户级 ~/.claude/，不在 repo、环境重建会丢、须重施）：
+  - hook：~/.claude/hooks/mainnet-gate.sh，md5 02ed4b830d12e93aa5968bf09501477e。
+    primary grep HERMES_ENV[[:space:]]*=[[:space:]]*['"]?mainnet（-Eiq）
+    + belt os.environ['HERMES_ENV']=...mainnet，命中即 permissionDecision=deny。
+  - settings：~/.claude/settings.json，md5 b07a03a1cd0df1501eceb6dff81e88df，
+    deny 数组 17 条（15 git + 2 mainnet：Bash(HERMES_ENV=mainnet:*) +
+    Bash(export HERMES_ENV=mainnet:*)），hooks.PreToolUse[matcher=Bash] 数组双 hook
+    （git-write-gate + mainnet-gate，并存非替换）。
+- 作用域铁律：hook 只拦 Claude Code 自己的工具调用，拦不了 Iris 裸 shell——
+  这是设计本身（写/发单只由 Iris 手敲）。验闸主体必须是 CC，由 Iris 跑必假绿
+  （实为闸按设计放行 Iris）。
+- 验闸 CLEAN 铁证（CC 主体）：G2 HERMES_ENV=mainnet echo 被 MAINNET-GATE deny、
+  echo 未执行、marker 全缺；G1 回归 git commit --allow-empty 仍被 GIT-WRITE-GATE
+  deny、HB==HA==8057628；控制组 C1 HERMES_ENV=testnet echo OK 放行、
+  C2 grep mainnet 只读放行（不过宽）。
+- known limitations（不阻塞，记录在案）：(1) 间接变量 X=mainnet; HERMES_ENV=$X；
+  (2) os.putenv/setdefault/update；(3) deny 对 MCP 工具不生效（#33106；当前无 MCP，不适用）。
+
+SS6.8.2 exec 入口收口硬判据（前瞻；CLI/exec 层未建，落为构建期契约 = E2.5 签 go 前置）
+- 证伪铁证：CLI 模块物理不存在 —— ls src/hermes/cli.py + ls src/hermes/cli
+  双 No such file or directory；entry point hermes = "hermes.cli:main"
+  （pyproject.toml:89）指向缺失模块，hermes 命令启动即崩。框架已选 Click
+  （click>=8.1,<9.0，pyproject.toml:58）。当下无任何活发单路径
+  （三层证伪：exec node 零命中 -> new_order 桩 -> CLI 缺失）。
+- E2.5 接执行层时必须兑现（四条，全绿才签 go）：
+  (1) 启动 live/testnet 撮合节点收口到唯一一条 hermes <subcommand>（Click command），无旁路；
+  (2) 默认 testnet，mainnet 仅靠显式 HERMES_ENV=mainnet，入口不另引开关；
+  (3) 子命令名确定即注册进 PreToolUse Bash hook deny（同机制），真单只由 Iris 手敲；
+  (4) 行为级验闸（CC 主体）且不真发单——CC 试跑该启动命令在 exec client 实例化 /
+      socket 打开前被 deny。
+
+带走项：
+(1) exec 层接入时，把启动子命令名注册进 hook deny + 跑行为级验闸 CLEAN（CC 主体），方可进 STOP-B；
+(2) 验闸主体铁律（SS6.8.1）写死，杜绝再用 Iris shell 验闸得假绿；
+(3) SS6.6 带走项 2（hook 对 MCP 不生效）当前无 MCP 不适用，未来引入 MCP 发单工具须重评。
+
 ## §12. 双轨制(出题人 ≠ 答题人)
 
 本项目核心制衡:verdict 判据的出题权与达标权分离。网页 Claude = 出题人 / 复核方,Claude Code = 答题人 / 执行方,用户 = 终审。§6.4 是本原则的逐轮操作细则;本节是其总原则。任何一方不得同时出题又自判达标。
