@@ -1123,7 +1123,8 @@ class TestReconnect:
                     received.append(msg)
                     if len(received) >= 11:
                         return
-            await asyncio.wait_for(_collect(), timeout=2.0)
+            # Py3.12 wait_for inline overhead x 11 reconnect cycles; harness limit must be >> natural ~1.9s, do not lower
+            await asyncio.wait_for(_collect(), timeout=10.0)
 
         backoff_delays = [d for d in sleep_calls if d > 0]
         assert max(backoff_delays) == 60, (
