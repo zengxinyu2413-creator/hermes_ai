@@ -296,6 +296,7 @@ class BinanceRestClient:
         """
         return await self._request("GET", "/api/v3/ping")
 
+    # DORMANT (E2.5-b3b 起): 此方法 (new_order) 属自建链 a 环. binance_rest.py 本身是 live REST 路径非 dormant, 仅此方法随自建链挂起. 见 handoff 6.3.
     async def new_order(
         self,
         symbol: str,

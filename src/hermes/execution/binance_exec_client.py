@@ -1,4 +1,5 @@
 """Binance Spot REST-backed NautilusTrader LiveExecutionClient."""
+# DORMANT (E2.5-b3b 起): 自建 exec 链 a/b1/b3a. live path 走 NT BinanceLiveExecClientFactory, 本链未被 cli.py 引用. 去留待 b3b-live testnet 验稳后重议, 见 handoff 6.3.
 from __future__ import annotations
 
 import asyncio
