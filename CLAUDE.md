@@ -183,6 +183,7 @@ LC-EXEC-3 收口为「证伪调查」——这类任务最易把不方便的 FAL
 
 **机制**（用户级 `~/.claude/`，不在本 repo 内，环境重建须重新施加）：
 - 主闸：PreToolUse hook `~/.claude/hooks/git-write-gate.sh`（matcher=Bash），命中 git 写动词（add / commit / push / reset / restore / rm / mv / stash / merge / rebase / cherry-pick / revert / tag / clean / pull）即返回 permissionDecision=deny。官方文档：hook 的 deny 连 `--dangerously-skip-permissions` / bypass 都拦得住。
+- 闸体指纹（用户级 ~/.claude/，环境重建须重施;SS6.7 启动复验据此核）：git-write-gate.sh md5 = 281c070df935338333d2fb18bfc74976（2026-06-01 绑定;此前本节未记 md5。注:CC memory 中的 ad6b8e17 非本档记录，已 disregard;实测文件 md5 == 交接基线 281c070d，G1 行为复验 deny）。
 - 副闸：`~/.claude/settings.json` 的 `permissions.deny`（同上 15 条动词）。deny 清单在 bypass 下会被跳过，故以 hook 为准。
 - 读类 git（status / log / diff / show）不拦。
 
