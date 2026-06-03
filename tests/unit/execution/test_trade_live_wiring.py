@@ -21,6 +21,13 @@ from hermes.cli import trade_live
 # Helpers
 # ---------------------------------------------------------------------------
 
+_ETHUSDT_FILTERS = [
+    {"filterType": "PRICE_FILTER", "minPrice": "0.01", "maxPrice": "1000000.00", "tickSize": "0.01"},
+    {"filterType": "LOT_SIZE", "minQty": "0.0001", "maxQty": "9000.00", "stepSize": "0.0001"},
+    {"filterType": "NOTIONAL", "minNotional": "5.00", "applyMinToMarket": True},
+]
+
+
 def _make_node_mock() -> MagicMock:
     node = MagicMock()
     node.build = MagicMock()
@@ -29,16 +36,26 @@ def _make_node_mock() -> MagicMock:
     return node
 
 
+def _mock_exchange_resp() -> MagicMock:
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"symbols": [{"symbol": "ETHUSDT", "filters": _ETHUSDT_FILTERS}]}
+    return resp
+
+
 def _invoke_live(captured: dict) -> tuple[object, MagicMock]:
-    """Invoke trade_live on the live path (no --dry); TradingNode fully mocked."""
+    """Invoke trade_live on the live path (no --dry); TradingNode + httpx fully mocked."""
     node_mock = _make_node_mock()
 
     def fake_node(config=None, loop=None) -> MagicMock:
         captured["config"] = config
         return node_mock
 
-    with patch("hermes.cli.TradingNode", side_effect=fake_node):
-        result = CliRunner().invoke(trade_live, [])
+    with (
+        patch("hermes.cli.TradingNode", side_effect=fake_node),
+        patch("httpx.get", return_value=_mock_exchange_resp()),
+    ):
+        result = CliRunner().invoke(trade_live, ["--price", "1300", "--qty", "0.0039"])
     return result, node_mock
 
 
