@@ -90,6 +90,7 @@ def nt_instrument_to_limits(
 
 
 _PPBS = "PERCENT_PRICE_BY_SIDE"
+_NOTIONAL = "NOTIONAL"
 _MN = "MIN_NOTIONAL"
 
 
@@ -105,11 +106,12 @@ def nt_instrument_to_limits_from_info(instrument) -> InstrumentLimits:
         instrument.info["filters"] — list[dict], filterType already converted to str
         filterType "PERCENT_PRICE_BY_SIDE" → bidMultiplierUp/Down, askMultiplierUp/Down
             (stored as str in the filter dict; converted to Decimal via Decimal(str_value))
-        filterType "MIN_NOTIONAL" → applyMinToMarket (bool; None treated as False)
+        filterType "NOTIONAL" → applyMinToMarket (bool; None treated as False) [preferred]
+        filterType "MIN_NOTIONAL" → applyToMarket (bool; None treated as False) [fallback]
 
     Raises:
         ValueError: if PERCENT_PRICE_BY_SIDE filter absent from filters list.
-        ValueError: if MIN_NOTIONAL filter absent from filters list.
+        ValueError: if neither NOTIONAL nor MIN_NOTIONAL filter found in filters list.
         ValueError: if any of the four multiplier fields is None in the PPBS filter.
     """
     filters: list[dict] = instrument.info["filters"]
@@ -134,15 +136,18 @@ def nt_instrument_to_limits_from_info(instrument) -> InstrumentLimits:
     ask_multiplier_up   = Decimal(ppbs["askMultiplierUp"])
     ask_multiplier_down = Decimal(ppbs["askMultiplierDown"])
 
+    notional_list = [f for f in filters if f["filterType"] == _NOTIONAL]
     mn_list = [f for f in filters if f["filterType"] == _MN]
-    if not mn_list:
-        raise ValueError(
-            f"filterType '{_MN}' not found in instrument.info['filters']; "
-            "cannot extract applyMinToMarket"
-        )
-    mn = mn_list[0]
 
-    raw_apply = mn.get("applyMinToMarket")
+    if notional_list:
+        raw_apply = notional_list[0].get("applyMinToMarket")
+    elif mn_list:
+        raw_apply = mn_list[0].get("applyToMarket")
+    else:
+        raise ValueError(
+            f"Neither '{_NOTIONAL}' nor '{_MN}' filter found in instrument.info['filters']; "
+            "cannot extract apply_min_to_market"
+        )
     apply_min_to_market: bool = False if raw_apply is None else bool(raw_apply)
 
     return nt_instrument_to_limits(

@@ -103,7 +103,7 @@ class TestNeighbourZeroDrift:
         # four baseline md5s zero-drift
         baselines = {
             "src/hermes/execution/precision.py": "bb0308ce6cf0b50f5214e5d9819f2cc8",
-            "src/hermes/execution/nt_translate.py": "045be1651ba9b0f0561d66c8f3a10cd5",
+            "src/hermes/execution/nt_translate.py": "a9cd0219475a99c6b1ea145d4e45f370",
             "src/hermes/execution/nt_submit.py": "db974054f08f4a15ee3357cd74a565cb",
             "src/hermes/risk/guard.py": "b93da5a226ac8a59f336dab525c99a24",
         }

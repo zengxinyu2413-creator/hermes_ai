@@ -381,7 +381,7 @@ class _FakeInstrumentWithInfo(_FakeInstrument):
         self.info = {"filters": filters}
 
 
-# SOL PPBS and MIN_NOTIONAL filter dicts (tie-back: step3_submit_cancel.py:59)
+# SOL PPBS and NOTIONAL filter dicts — true NOTIONAL 六字段形态 (CE4)
 _SOL_FILTERS: list[dict] = [
     {
         "filterType": "PERCENT_PRICE_BY_SIDE",
@@ -391,9 +391,12 @@ _SOL_FILTERS: list[dict] = [
         "askMultiplierDown": "0.5",
     },
     {
-        "filterType": "MIN_NOTIONAL",
+        "filterType": "NOTIONAL",
         "minNotional": "5",
         "applyMinToMarket": True,
+        "maxNotional": "9000000",
+        "applyMaxToMarket": False,
+        "avgPriceMins": 5,
     },
 ]
 
@@ -591,6 +594,7 @@ class TestCA4NoneHandling:
             nt_instrument_to_limits_from_info(inst)
 
     def test_apply_min_to_market_none_becomes_false(self) -> None:
+        # MIN_NOTIONAL form uses applyToMarket (not applyMinToMarket) — CE3 reconcile
         inst = _FakeInstrumentWithInfo(
             price_increment="0.01", size_increment="0.001",
             min_quantity="0.001", max_quantity="90000",
@@ -601,7 +605,7 @@ class TestCA4NoneHandling:
                     "bidMultiplierUp": "2.0", "bidMultiplierDown": "0.5",
                     "askMultiplierUp": "2.0", "askMultiplierDown": "0.5",
                 },
-                {"filterType": "MIN_NOTIONAL", "applyMinToMarket": None},
+                {"filterType": "MIN_NOTIONAL", "applyToMarket": None},
             ],
         )
         lim = nt_instrument_to_limits_from_info(inst)
@@ -673,3 +677,50 @@ class TestCA6HappyPath:
         lim = _sol_limits_from_info()
         with pytest.raises((AttributeError, TypeError)):
             lim.price_tick = Decimal("99")  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# CA7: dual-form recognition — NOTIONAL (CE1) and MIN_NOTIONAL (CE2)
+# ---------------------------------------------------------------------------
+
+
+class TestCA7DualFilterForm:
+    def test_notional_form_apply_from_apply_min_to_market(self) -> None:
+        # CE1: NOTIONAL filter → apply_min_to_market reads applyMinToMarket
+        inst = _FakeInstrumentWithInfo(
+            price_increment="0.01", size_increment="0.001",
+            min_quantity="0.001", max_quantity="90000",
+            min_price="0", max_price="0", min_notional="5",
+            filters=[
+                {
+                    "filterType": "PERCENT_PRICE_BY_SIDE",
+                    "bidMultiplierUp": "2.0", "bidMultiplierDown": "0.5",
+                    "askMultiplierUp": "2.0", "askMultiplierDown": "0.5",
+                },
+                {
+                    "filterType": "NOTIONAL",
+                    "minNotional": "5", "applyMinToMarket": True,
+                    "maxNotional": "9000000", "applyMaxToMarket": False, "avgPriceMins": 5,
+                },
+            ],
+        )
+        lim = nt_instrument_to_limits_from_info(inst)
+        assert lim.apply_min_to_market is True
+
+    def test_min_notional_form_apply_from_apply_to_market(self) -> None:
+        # CE2: MIN_NOTIONAL filter → apply_min_to_market reads applyToMarket
+        inst = _FakeInstrumentWithInfo(
+            price_increment="0.01", size_increment="0.001",
+            min_quantity="0.001", max_quantity="90000",
+            min_price="0", max_price="0", min_notional="5",
+            filters=[
+                {
+                    "filterType": "PERCENT_PRICE_BY_SIDE",
+                    "bidMultiplierUp": "2.0", "bidMultiplierDown": "0.5",
+                    "askMultiplierUp": "2.0", "askMultiplierDown": "0.5",
+                },
+                {"filterType": "MIN_NOTIONAL", "applyToMarket": True},
+            ],
+        )
+        lim = nt_instrument_to_limits_from_info(inst)
+        assert lim.apply_min_to_market is True
