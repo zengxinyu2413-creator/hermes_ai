@@ -71,6 +71,23 @@ class TestFileStateStore:
     def test_ck6_protocol_satisfied(self, tmp_path: Path):
         assert isinstance(FileStateStore(tmp_path / "f.json"), RiskStateStore)
 
+    def test_ck11_interrupted_save_preserves_prior_state(self, tmp_path: Path, monkeypatch):
+        path = tmp_path / "state.json"
+        store = FileStateStore(path)
+        old_state = {"state": "ACTIVE", "consecutive_losses": 1}
+        store.save(old_state)
+
+        def bad_fsync(fd: int) -> None:
+            raise OSError("simulated disk error")
+
+        monkeypatch.setattr("os.fsync", bad_fsync)
+
+        with pytest.raises(OSError):
+            store.save({"state": "HALTED", "consecutive_losses": 3})
+
+        assert store.load() == old_state
+        assert list(tmp_path.glob(".state.json.*.tmp")) == []
+
 
 # ---------------------------------------------------------------------------
 # CK3 — Cross-restart streak roundtrip (simulated via two guard instances)
@@ -278,19 +295,21 @@ class TestBackwardCompat:
 
 
 # ---------------------------------------------------------------------------
-# CK10 — LC-RISK-2 documentation check (static)
+# CK10 — atomic-write documentation check (static)
 # ---------------------------------------------------------------------------
 
 
-class TestLC2Documentation:
-    def test_ck10_lc_risk2_in_module_docstring(self):
+class TestAtomicWriteDocumentation:
+    def test_ck10_lc_risk4_in_module_docstring(self):
         import hermes.risk.risk_state_store as mod
 
         src = mod.__doc__ or ""
-        assert "LC-RISK-2" in src
+        assert "LC-RISK-4" in src
+        assert "os.replace" in src or "atomic" in src.lower()
 
-    def test_ck10_file_state_store_class_doc_mentions_lc_risk2(self):
+    def test_ck10_file_state_store_class_doc_mentions_atomic(self):
         from hermes.risk.risk_state_store import FileStateStore as FS
 
         doc = FS.__doc__ or ""
-        assert "LC-RISK-2" in doc
+        assert "LC-RISK-4" in doc
+        assert "os.replace" in doc or "atomic" in doc.lower()

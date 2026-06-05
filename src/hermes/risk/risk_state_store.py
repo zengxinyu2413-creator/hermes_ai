@@ -1,25 +1,24 @@
 """RiskStateStore: persistence protocol for RiskGuard state snapshots.
 
 In scope: RiskStateStore Protocol, InMemoryStateStore (test default),
-FileStateStore (JSON snapshot, POSIX multi-process safe via fcntl.flock).
+FileStateStore (JSON snapshot, atomic write via tempfile + os.replace).
 
 State dict schema: {"state": "ACTIVE" | "HALTED", "consecutive_losses": int}.
 _daily_pnl is intentionally excluded — daily accumulator has ambiguous semantics
 across restarts (D2 boundary).
 
-FileStateStore uses fcntl.flock(LOCK_EX) to serialise concurrent access;
-LOCK_UN is released in a finally clause so exceptions in the critical section
-do not leak the lock.
+FileStateStore.save() writes to a tempfile in the same directory, fsyncs,
+then os.replace()s into place; the reader never sees a truncated or partial file.
 
-LC-RISK-2 resolved: fcntl.flock 排他锁已加，多进程串行写入安全。
-LC-XPLAT-1: POSIX (Linux) only — fcntl is not available on Windows;
-Windows support not implemented.
+LC-RISK-2 superseded: 原子 os.replace 消除截断 race；单写设计，并发 writer = last-write-wins.
+LC-RISK-4 resolved; LC-XPLAT-1 resolved: 无 fcntl，os.replace 跨平台原子.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -60,16 +59,14 @@ class InMemoryStateStore:
 class FileStateStore:
     """JSON-snapshot flat-file RiskStateStore.
 
-    Each call to save() overwrites the file with the latest state dict.
+    save() writes to a tempfile in the same directory, fsyncs, then
+    os.replace()s into place — atomic; the reader never sees a truncated file.
     load() reads the file on demand (called once at RiskGuard construction).
     A missing file returns None — not an error.
 
-    Both load() and save() hold fcntl.flock(LOCK_EX) over the critical
-    section; LOCK_UN is released in a finally clause, so exceptions in the
-    critical section do not leak the lock.
-
-    LC-RISK-2 resolved: fcntl.flock 排他锁已加，多进程串行写入安全。
-    LC-XPLAT-1: POSIX (Linux) only — Windows not supported.
+    LC-RISK-4 resolved: atomic os.replace eliminates the truncation race.
+    LC-RISK-2 superseded: 原子 os.replace 消除截断 race；单写设计，并发 writer = last-write-wins.
+    LC-XPLAT-1 resolved: 无 fcntl，os.replace 跨平台原子.
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -78,18 +75,21 @@ class FileStateStore:
     def load(self) -> dict | None:
         if not self._path.exists():
             return None
-        with self._path.open("r", encoding="utf-8") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            try:
-                content = fh.read()
-            finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
-        return json.loads(content)
+        return json.loads(self._path.read_text(encoding="utf-8"))
 
     def save(self, state: dict) -> None:
-        with self._path.open("w", encoding="utf-8") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            try:
+        fd, tmp = tempfile.mkstemp(
+            prefix=f".{self._path.name}.", suffix=".tmp", dir=self._path.parent
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(state))
-            finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self._path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise

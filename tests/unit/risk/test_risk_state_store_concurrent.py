@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import fcntl
 import multiprocessing
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -57,60 +55,29 @@ def test_concurrent_save_no_corruption(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# CL9 — exception in critical section: lock released via finally
+# CL9 — atomic-write invariants (supersedes old fcntl lock-release tests)
 # ---------------------------------------------------------------------------
 
-def test_save_lock_released_on_exception(tmp_path, monkeypatch):
-    """LOCK_UN is called in finally even when write raises — no lock leak."""
-    from hermes.risk import risk_state_store as mod
+def test_cl9_no_fcntl_in_module():
+    """LC-XPLAT-1 resolved: risk_state_store no longer imports fcntl."""
+    import hermes.risk.risk_state_store as mod
 
-    calls: list[int] = []
-    monkeypatch.setattr(mod.fcntl, "flock", lambda fh, op: calls.append(op))
+    assert not hasattr(mod, "fcntl"), "fcntl must not be present — LC-XPLAT-1 fix"
 
-    store = FileStateStore(tmp_path / "state.json")
 
-    # Verify normal path
+def test_cl9_save_exception_no_residual(tmp_path, monkeypatch):
+    """Atomic save: OSError during fsync leaves no tmp file; original is intact."""
+    path = tmp_path / "state.json"
+    store = FileStateStore(path)
     store.save({"state": "ACTIVE", "consecutive_losses": 0})
-    assert calls == [fcntl.LOCK_EX, fcntl.LOCK_UN]
-    calls.clear()
 
-    # Inject failure in write — patch at class level
-    mock_fh = MagicMock()
-    mock_fh.write.side_effect = OSError("simulated disk error")
-    mock_ctx = MagicMock()
-    mock_ctx.__enter__ = MagicMock(return_value=mock_fh)
-    mock_ctx.__exit__ = MagicMock(return_value=False)
+    def bad_fsync(fd: int) -> None:
+        raise OSError("simulated fsync error")
 
-    with patch.object(Path, "open", return_value=mock_ctx):
-        with pytest.raises(OSError, match="simulated disk error"):
-            store.save({"state": "HALTED", "consecutive_losses": 5})
+    monkeypatch.setattr("os.fsync", bad_fsync)
 
-    assert calls.count(fcntl.LOCK_EX) == 1, "LOCK_EX not acquired"
-    assert calls.count(fcntl.LOCK_UN) == 1, "LOCK_UN not released — lock leaked!"
+    with pytest.raises(OSError):
+        store.save({"state": "HALTED", "consecutive_losses": 5})
 
-
-def test_load_lock_released_on_exception(tmp_path, monkeypatch):
-    """LOCK_UN is called in finally even when read raises — no lock leak."""
-    from hermes.risk import risk_state_store as mod
-
-    (tmp_path / "state.json").write_text(
-        '{"state":"ACTIVE","consecutive_losses":0}', encoding="utf-8"
-    )
-
-    calls: list[int] = []
-    monkeypatch.setattr(mod.fcntl, "flock", lambda fh, op: calls.append(op))
-
-    store = FileStateStore(tmp_path / "state.json")
-
-    mock_fh = MagicMock()
-    mock_fh.read.side_effect = OSError("simulated read error")
-    mock_ctx = MagicMock()
-    mock_ctx.__enter__ = MagicMock(return_value=mock_fh)
-    mock_ctx.__exit__ = MagicMock(return_value=False)
-
-    with patch.object(Path, "open", return_value=mock_ctx):
-        with pytest.raises(OSError, match="simulated read error"):
-            store.load()
-
-    assert calls.count(fcntl.LOCK_EX) == 1, "LOCK_EX not acquired"
-    assert calls.count(fcntl.LOCK_UN) == 1, "LOCK_UN not released — lock leaked!"
+    assert list(tmp_path.glob(".state.json.*.tmp")) == []
+    assert store.load() == {"state": "ACTIVE", "consecutive_losses": 0}
