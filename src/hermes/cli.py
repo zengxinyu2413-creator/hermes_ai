@@ -16,8 +16,7 @@ continue to run; they are not deleted.
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
+import os
 from decimal import Decimal
 from typing import Any
 
@@ -25,8 +24,13 @@ import click
 import httpx
 from nautilus_trader.adapters.binance import BinanceExecClientConfig, BinanceLiveExecClientFactory
 from nautilus_trader.adapters.binance.common.enums import BinanceAccountType, BinanceEnvironment
+from nautilus_trader.adapters.binance.config import BinanceInstrumentProviderConfig
+from nautilus_trader.adapters.binance.http.client import BinanceHttpClient
+from nautilus_trader.adapters.binance.spot.providers import BinanceSpotInstrumentProvider
+from nautilus_trader.common.component import LiveClock
 from nautilus_trader.live.config import TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
+from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 
 from hermes.execution.oneshot_strategy import OneShotConfig, OneShotStrategy
 from hermes.execution.precision import InstrumentLimits, build_order_spec
@@ -122,6 +126,9 @@ def trade_live(
                 account_type=BinanceAccountType.SPOT,
                 max_retries=0,  # zero retries on order submission
                 # api_key / api_secret left None: NT reads BINANCE_TESTNET_API_KEY/SECRET
+                instrument_provider=BinanceInstrumentProviderConfig(
+                    load_ids=frozenset({InstrumentId.from_str(f"{symbol.upper()}.BINANCE")})
+                ),
             )
         },
     )
@@ -178,8 +185,6 @@ def trade_live(
     def on_done(venue_order_id: str | None, reason: str | None) -> None:
         result["venue_order_id"] = venue_order_id
         result["reason"] = reason
-        with contextlib.suppress(RuntimeError):
-            asyncio.get_running_loop().stop()
 
     strategy_config = OneShotConfig(
         instrument_id_str=f"{symbol.upper()}.BINANCE",
@@ -192,6 +197,23 @@ def trade_live(
     node = TradingNode(config=config)
     node.add_exec_client_factory("BINANCE", BinanceLiveExecClientFactory)
     node.build()
+    if os.getenv("HERMES_SKIP_INJECT") != "1":
+        # ---- 路径 C：注入现货 instrument 进 cache（== RiskEngine 读的 Cache）----
+        _inj_clock = LiveClock()
+        _inj_http = BinanceHttpClient(            # exchangeInfo 公开端点，无需凭据
+            clock=_inj_clock, api_key=None, api_secret=None,
+            base_url=_TESTNET_BASE,
+        )
+        _inj_provider = BinanceSpotInstrumentProvider(
+            client=_inj_http, clock=_inj_clock, account_type=BinanceAccountType.SPOT,
+        )
+        _iid = InstrumentId(Symbol(symbol.upper()), Venue("BINANCE"))
+        node.kernel.loop.run_until_complete(_inj_provider.load_ids_async([_iid]))
+        _instrument = _inj_provider.find(_iid)
+        assert _instrument is not None, f"path-C: provider 未取到 {_iid}"
+        node.kernel.cache.add_instrument(_instrument)
+        assert node.kernel.cache.instrument(_iid) is not None, f"path-C: cache 回读 {_iid} 空"
+        # ---- 路径 C 结束 ----
     node.trader.add_strategy(strategy)
     node.run()
 

@@ -38,6 +38,9 @@ class OneShotStrategy(Strategy):  # type: ignore[misc]
         self._on_done = on_done
         self._submitted = False
 
+    def on_stop(self) -> None:
+        pass
+
     def on_start(self) -> None:
         order = self.order_factory.limit(
             instrument_id=self._instrument_id,
@@ -55,8 +58,10 @@ class OneShotStrategy(Strategy):  # type: ignore[misc]
             f"  price={self._price}  qty={self._quantity}"
         )
         self._on_done(venue_order_id, None)
+        self.shutdown_system(reason="oneshot order accepted")
 
     def on_order_rejected(self, event: Any) -> None:
         reason = str(event.reason)
         self._log.error(f"ORDER REJECTED  reason={reason}")
         self._on_done(None, reason)
+        self.shutdown_system(reason="oneshot order rejected")

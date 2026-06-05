@@ -153,15 +153,18 @@ class TestOnOrderAccepted:
         strategy, _, _ = _make_strategy(on_done=on_done)
         event = MagicMock()
         event.venue_order_id = "987654321"
-        strategy.on_order_accepted(event)
+        with patch.object(OneShotStrategy, "shutdown_system") as mock_shutdown:
+            strategy.on_order_accepted(event)
         on_done.assert_called_once_with("987654321", None)
+        mock_shutdown.assert_called_once()
 
     def test_on_done_reason_is_none_on_accept(self) -> None:
         on_done = MagicMock()
         strategy, _, _ = _make_strategy(on_done=on_done)
         event = MagicMock()
         event.venue_order_id = "111"
-        strategy.on_order_accepted(event)
+        with patch.object(OneShotStrategy, "shutdown_system"):
+            strategy.on_order_accepted(event)
         _, reason = on_done.call_args.args
         assert reason is None
 
@@ -172,7 +175,8 @@ class TestOnOrderAccepted:
         mock_id.__str__ = lambda self: "VID-42"
         event = MagicMock()
         event.venue_order_id = mock_id
-        strategy.on_order_accepted(event)
+        with patch.object(OneShotStrategy, "shutdown_system"):
+            strategy.on_order_accepted(event)
         vid, _ = on_done.call_args.args
         assert vid == "VID-42"
 
@@ -183,7 +187,8 @@ class TestOnOrderRejected:
         strategy, _, _ = _make_strategy(on_done=on_done)
         event = MagicMock()
         event.reason = "Insufficient balance"
-        strategy.on_order_rejected(event)
+        with patch.object(OneShotStrategy, "shutdown_system"):
+            strategy.on_order_rejected(event)
         on_done.assert_called_once_with(None, "Insufficient balance")
 
     def test_on_done_venue_id_is_none_on_reject(self) -> None:
@@ -191,7 +196,8 @@ class TestOnOrderRejected:
         strategy, _, _ = _make_strategy(on_done=on_done)
         event = MagicMock()
         event.reason = "Bad qty"
-        strategy.on_order_rejected(event)
+        with patch.object(OneShotStrategy, "shutdown_system"):
+            strategy.on_order_rejected(event)
         vid, _ = on_done.call_args.args
         assert vid is None
 
@@ -202,6 +208,7 @@ class TestOnOrderRejected:
         mock_reason.__str__ = lambda self: "ERR-1013"
         event = MagicMock()
         event.reason = mock_reason
-        strategy.on_order_rejected(event)
+        with patch.object(OneShotStrategy, "shutdown_system"):
+            strategy.on_order_rejected(event)
         _, reason = on_done.call_args.args
         assert reason == "ERR-1013"

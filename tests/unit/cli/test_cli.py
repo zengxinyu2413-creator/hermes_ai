@@ -150,6 +150,8 @@ class TestTradeLiveLiveWiring:
         with (
             patch("hermes.cli.TradingNode", return_value=mock_node),
             patch("hermes.cli.BinanceLiveExecClientFactory"),
+            patch("hermes.cli.BinanceSpotInstrumentProvider"),
+            patch("hermes.cli.BinanceHttpClient"),
             patch("httpx.get", return_value=_mock_exchange_info_response()),
         ):
             result = runner.invoke(main, args)
