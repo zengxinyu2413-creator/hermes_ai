@@ -165,3 +165,53 @@ class TestLC5Documentation:
 
         doc = FS.__doc__ or ""
         assert "LC-EXEC-5" in doc, "FileStore docstring must document LC-EXEC-5"
+
+
+# ---------------------------------------------------------------------------
+# LC-XPLAT-1 P1 soft-degrade tests (T-deg1 / T-deg2 / T-deg3)
+# ---------------------------------------------------------------------------
+
+
+class TestLCXPLAT1SoftDegrade:
+    def test_deg1_no_fcntl_warns_runtime_warning(self, tmp_path, monkeypatch):
+        import hermes.execution.seen_store as mod
+
+        monkeypatch.setattr(mod, "_HAVE_FCNTL", False)
+        monkeypatch.setattr(mod, "_WARNED_NO_LOCK", False)
+        store = mod.FileStore(tmp_path / "seen.txt")
+
+        with pytest.warns(RuntimeWarning, match="multi-process lock"):
+            store.add("order-1")
+
+    def test_deg2_no_fcntl_dedup_still_works(self, tmp_path, monkeypatch):
+        import hermes.execution.seen_store as mod
+
+        monkeypatch.setattr(mod, "_HAVE_FCNTL", False)
+        monkeypatch.setattr(mod, "_WARNED_NO_LOCK", False)
+        store = mod.FileStore(tmp_path / "seen.txt")
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            store.add("order-a")
+            store.add("order-b")
+            store.add("order-a")   # duplicate
+
+        result = store.load()
+        assert result == {"order-a", "order-b"}
+
+    def test_deg3_warning_fires_only_once(self, tmp_path, monkeypatch):
+        import hermes.execution.seen_store as mod
+
+        monkeypatch.setattr(mod, "_HAVE_FCNTL", False)
+        monkeypatch.setattr(mod, "_WARNED_NO_LOCK", False)
+        store = mod.FileStore(tmp_path / "seen.txt")
+
+        import warnings
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            store.add("order-1")
+            store.add("order-2")
+
+        rw = [w for w in record if issubclass(w.category, RuntimeWarning)]
+        assert len(rw) == 1, f"Expected 1 RuntimeWarning, got {len(rw)}"
