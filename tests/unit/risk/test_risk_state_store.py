@@ -1,7 +1,8 @@
-"""Tests for RiskStateStore Protocol + InMemoryStateStore + FileStateStore — CK1~CK10."""
+"""Tests for RiskStateStore Protocol + InMemoryStateStore + FileStateStore — CK1~CK17."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -313,3 +314,119 @@ class TestAtomicWriteDocumentation:
         doc = FS.__doc__ or ""
         assert "LC-RISK-4" in doc
         assert "os.replace" in doc or "atomic" in doc.lower()
+
+
+# ---------------------------------------------------------------------------
+# CK12~CK17 — daily_pnl cross-restart persistence (B1 opt-in via now=)
+# ---------------------------------------------------------------------------
+
+_TODAY_EPOCH = datetime(2026, 6, 6, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+_YESTERDAY_EPOCH = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+
+
+class TestDailyPnlPersistence:
+    def test_ck12_daily_pnl_restored_same_day(self, tmp_path: Path):
+        path = tmp_path / "risk.json"
+        guard_a = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_TODAY_EPOCH,
+        )
+        guard_a.on_trade_result(Decimal("-30"), now=_TODAY_EPOCH)
+
+        guard_b = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_TODAY_EPOCH,
+        )
+        assert guard_b.daily_pnl == Decimal("-30")
+
+    def test_ck13_daily_pnl_zeroed_cross_day(self, tmp_path: Path):
+        path = tmp_path / "risk.json"
+        guard_a = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_YESTERDAY_EPOCH,
+        )
+        guard_a.on_trade_result(Decimal("-30"), now=_YESTERDAY_EPOCH)
+
+        guard_b = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_TODAY_EPOCH,
+        )
+        assert guard_b.daily_pnl == Decimal(0)
+
+    def test_ck14_old_snapshot_no_date_zeroes_daily_pnl(self, tmp_path: Path):
+        path = tmp_path / "risk.json"
+        FileStateStore(path).save({"state": "ACTIVE", "consecutive_losses": 2})
+        guard = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_TODAY_EPOCH,
+        )
+        assert guard.daily_pnl == Decimal(0)
+        assert guard.consecutive_losses == 2
+
+    def test_ck15_now_none_in_init_degrades_to_b1(self, tmp_path: Path):
+        path = tmp_path / "risk.json"
+        guard_a = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+        )
+        guard_a.on_trade_result(Decimal("-30"), now=_TODAY_EPOCH)
+
+        guard_b = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=None,
+        )
+        assert guard_b.daily_pnl == Decimal(0)
+
+    def test_ck16_halted_survives_regardless_of_daily_pnl_date(self, tmp_path: Path):
+        path = tmp_path / "risk.json"
+        guard_a = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+        )
+        guard_a.halt()
+
+        guard_b = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_TODAY_EPOCH,
+        )
+        assert guard_b.state is GuardState.HALTED
+        assert guard_b.daily_pnl == Decimal(0)
+
+    def test_ck17_reset_daily_with_now_persists_zero(self, tmp_path: Path):
+        path = tmp_path / "risk.json"
+        guard_a = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+        )
+        guard_a.on_trade_result(Decimal("-30"), now=_TODAY_EPOCH)
+        guard_a.reset_daily(now=_TODAY_EPOCH)
+
+        snap = FileStateStore(path).load()
+        assert snap is not None
+        assert snap["daily_pnl"] == "0"
+        assert snap["daily_pnl_date"] == "2026-06-06"
+
+        guard_b = RiskGuard(
+            consecutive_loss_limit=99,
+            on_halt=lambda: None,
+            state_store=FileStateStore(path),
+            now=_TODAY_EPOCH,
+        )
+        assert guard_b.daily_pnl == Decimal(0)

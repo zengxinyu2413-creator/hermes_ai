@@ -258,7 +258,8 @@ class TestDocstringAndDependencies:
         assert "import time" not in src
         assert "time.monotonic" not in src
         assert "time.time" not in src
-        assert "datetime" not in src
+        assert "datetime.now" not in src
+        assert "datetime.today" not in src
 
     def test_cbt1_no_nautilus_import_in_guard(self):
         import inspect

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Callable
@@ -74,6 +75,7 @@ class RiskGuard:
         min_balance: Decimal | None = None,
         max_orders_per_window: int | None = None,
         window_seconds: float | None = None,
+        now: float | None = None,
     ) -> None:
         self._limit = consecutive_loss_limit
         self._on_halt = on_halt
@@ -92,11 +94,17 @@ class RiskGuard:
             if snap is not None:
                 self._state = GuardState(snap["state"])
                 self._consecutive_losses = snap["consecutive_losses"]
-                # _daily_pnl intentionally not restored — intraday accumulator
-                # has ambiguous semantics across restarts (D2 / backlog).
+                if now is not None and "daily_pnl_date" in snap:
+                    today = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+                    if snap["daily_pnl_date"] == today:
+                        self._daily_pnl = Decimal(snap["daily_pnl"])
 
-    def _snapshot(self) -> dict:
-        return {"state": self._state.value, "consecutive_losses": self._consecutive_losses}
+    def _snapshot(self, now: float | None = None) -> dict:
+        snap: dict = {"state": self._state.value, "consecutive_losses": self._consecutive_losses}
+        if now is not None:
+            snap["daily_pnl"] = str(self._daily_pnl)
+            snap["daily_pnl_date"] = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+        return snap
 
     @property
     def state(self) -> GuardState:
@@ -167,8 +175,13 @@ class RiskGuard:
                 )
             self._order_times.append(now)
 
-    def on_trade_result(self, pnl: Decimal) -> None:
-        """Feed a completed trade's PnL. pnl < 0 counts as a loss."""
+    def on_trade_result(self, pnl: Decimal, now: float | None = None) -> None:
+        """Feed a completed trade's PnL. pnl < 0 counts as a loss.
+
+        now: epoch seconds (UTC). When provided, persists daily_pnl + date so
+        cross-restart restore works (B1 opt-in). When None, daily_pnl is not
+        included in the snapshot (backward-compatible, D2 boundary preserved).
+        """
         if self._state is GuardState.HALTED:
             return
         self._daily_pnl += pnl
@@ -179,7 +192,7 @@ class RiskGuard:
             self._state = GuardState.HALTED
             self._on_halt()
             if self._store is not None:
-                self._store.save(self._snapshot())
+                self._store.save(self._snapshot(now))
             return
         if pnl < Decimal(0):
             self._consecutive_losses += 1
@@ -187,12 +200,18 @@ class RiskGuard:
                 self._state = GuardState.HALTED
                 self._on_halt()
             if self._store is not None:
-                self._store.save(self._snapshot())
+                self._store.save(self._snapshot(now))
         else:
             self._consecutive_losses = 0
             if self._store is not None:
-                self._store.save(self._snapshot())
+                self._store.save(self._snapshot(now))
 
-    def reset_daily(self) -> None:
-        """Reset the daily PnL accumulator to zero. Does not clear HALTED state."""
+    def reset_daily(self, now: float | None = None) -> None:
+        """Reset the daily PnL accumulator to zero. Does not clear HALTED state.
+
+        now: epoch seconds. When provided and store is set, persists the zeroed
+        accumulator with today's date so the next restart sees a clean slate.
+        """
         self._daily_pnl = Decimal(0)
+        if now is not None and self._store is not None:
+            self._store.save(self._snapshot(now))
