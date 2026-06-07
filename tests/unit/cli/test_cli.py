@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from hermes.cli import _parse_instrument_limits, main
+from hermes.cli import main
 
 _ETHUSDT_FILTERS = [
     {
@@ -27,52 +27,6 @@ _ETHUSDT_FILTERS = [
         "applyMinToMarket": True,
     },
 ]
-
-
-def _mock_exchange_info_response(symbol: str = "ETHUSDT") -> MagicMock:
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
-    mock_resp.json.return_value = {
-        "symbols": [{"symbol": symbol, "filters": _ETHUSDT_FILTERS}]
-    }
-    return mock_resp
-
-
-class TestParseInstrumentLimits:
-    def test_price_tick_from_filter(self) -> None:
-        limits = _parse_instrument_limits(_ETHUSDT_FILTERS)
-        assert limits.price_tick == Decimal("0.01000000")
-
-    def test_qty_step_from_filter(self) -> None:
-        limits = _parse_instrument_limits(_ETHUSDT_FILTERS)
-        assert limits.qty_step == Decimal("0.00010000")
-
-    def test_min_notional_from_filter(self) -> None:
-        limits = _parse_instrument_limits(_ETHUSDT_FILTERS)
-        assert limits.min_notional == Decimal("5.00000000")
-
-    def test_apply_min_to_market(self) -> None:
-        limits = _parse_instrument_limits(_ETHUSDT_FILTERS)
-        assert limits.apply_min_to_market is True
-
-    def test_default_bid_multiplier_when_no_percent_price(self) -> None:
-        limits = _parse_instrument_limits(_ETHUSDT_FILTERS)
-        assert limits.bid_multiplier_up == Decimal("5")
-
-    def test_percent_price_by_side_parsed_when_present(self) -> None:
-        filters_with_pps = [
-            *_ETHUSDT_FILTERS,
-            {
-                "filterType": "PERCENT_PRICE_BY_SIDE",
-                "bidMultiplierUp": "1.2",
-                "bidMultiplierDown": "0.8",
-                "askMultiplierUp": "1.2",
-                "askMultiplierDown": "0.8",
-            },
-        ]
-        limits = _parse_instrument_limits(filters_with_pps)
-        assert limits.bid_multiplier_up == Decimal("1.2")
-        assert limits.ask_multiplier_down == Decimal("0.8")
 
 
 class TestTradeLiveDry:
@@ -124,11 +78,56 @@ class TestTradeLiveLiveParams:
         assert result.exit_code != 0
 
 
+class _FakeMoney:
+    def __init__(self, value: str) -> None:
+        self._decimal = Decimal(value)
+
+    def as_decimal(self) -> Decimal:
+        return self._decimal
+
+
+def _fake_live_instrument() -> MagicMock:
+    """Build a fake NT instrument exposing the 7 direct attrs + .info["filters"]
+    that nt_instrument_to_limits_from_info/nt_instrument_to_limits read.
+
+    Values are parsed from the same _ETHUSDT_FILTERS dicts the deleted
+    _parse_instrument_limits consumed — same Decimal value *and* precision —
+    so the resulting InstrumentLimits, and therefore order_spec, stay
+    numerically identical to the pre-refactor wiring (the wiring assertions
+    below were tuned against that exact rounding output).
+    """
+    price_filter = next(f for f in _ETHUSDT_FILTERS if f["filterType"] == "PRICE_FILTER")
+    lot_size_filter = next(f for f in _ETHUSDT_FILTERS if f["filterType"] == "LOT_SIZE")
+    notional_filter = next(f for f in _ETHUSDT_FILTERS if f["filterType"] == "NOTIONAL")
+
+    instrument = MagicMock()
+    instrument.price_increment = Decimal(price_filter["tickSize"])
+    instrument.size_increment = Decimal(lot_size_filter["stepSize"])
+    instrument.min_quantity = Decimal(lot_size_filter["minQty"])
+    instrument.max_quantity = Decimal(lot_size_filter["maxQty"])
+    instrument.min_price = Decimal(price_filter["minPrice"])
+    instrument.max_price = Decimal(price_filter["maxPrice"])
+    instrument.min_notional = _FakeMoney(notional_filter["minNotional"])
+    instrument.info = {
+        "filters": [
+            *_ETHUSDT_FILTERS,
+            {
+                "filterType": "PERCENT_PRICE_BY_SIDE",
+                "bidMultiplierUp": "5",
+                "bidMultiplierDown": "0.2",
+                "askMultiplierUp": "5",
+                "askMultiplierDown": "0.2",
+            },
+        ]
+    }
+    return instrument
+
+
 class TestTradeLiveLiveWiring:
     """Verify params correctly passed in and add_strategy called."""
 
     def _invoke_live(self, extra_args: list[str] | None = None) -> tuple[MagicMock, MagicMock]:
-        """Invoke trade-live with mocked node/httpx; return (mock_node, added_strategy)."""
+        """Invoke trade-live with mocked node/provider; return (mock_node, added_strategy)."""
         mock_node = MagicMock()
         added = {}
 
@@ -150,10 +149,10 @@ class TestTradeLiveLiveWiring:
         with (
             patch("hermes.cli.TradingNode", return_value=mock_node),
             patch("hermes.cli.BinanceLiveExecClientFactory"),
-            patch("hermes.cli.BinanceSpotInstrumentProvider"),
+            patch("hermes.cli.BinanceSpotInstrumentProvider") as mock_provider_cls,
             patch("hermes.cli.BinanceHttpClient"),
-            patch("httpx.get", return_value=_mock_exchange_info_response()),
         ):
+            mock_provider_cls.return_value.find.return_value = _fake_live_instrument()
             result = runner.invoke(main, args)
 
         return mock_node, added.get("strategy"), result
