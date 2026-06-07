@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## §1 项目宗旨与范围
+
+CLAUDE.md 是 Claude Code 的工作协议（How）。项目定位、范围、MVP 定义、阶段路线图、退出标准属"项目宪章层面"（What/Why），权威源是 CHARTER.md，本文件不复述。
+
+代码严格度按 CHARTER §5 三层标准认领：A 层金融正确性（订单 / 仓位 / PnL / 风控 / 签名 / 精度）= 最高门槛，完整单测 + 防御性编程，且多为 ce9 受保护文件（见 §8）；B 层基础设施（DB / 日志 / 配置 / 重连）= 核心路径有测试；C 层策略代码（信号 / 因子 / 参数）= 回测代替单测。动哪一层，先认这条门槛。
+
+范围红线见 CHARTER §6"不做清单"；心态纪律见 CHARTER §7（正职是命、每 session ≤ 4 小时高质量时间、阶段间休息）。
+
 ## Commands
 
 ```bash
