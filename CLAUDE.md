@@ -345,3 +345,29 @@ Plan-Mode 任务包：执行方（Claude Code）收到后，第一个输出块�
 违反时：该次产物不强制回滚（避免 EXEC-DRIFT 式"回滚正确产物"），但必须在落档中显式标注 [PLAN-SKIP]，并事后补一份 PLAN 复盘（列出本应声明的步骤 / STOP 判定 / 写入清单）。
 
 与 §7.1 关系：本条是 §7.1 "ACK 后、首次调用工具前必出 [PLAN]" 的强制化——把"应当"升为"硬门禁 + 违规留痕"。本条不豁免任何 STOP 红线，STOP 永远先于 Plan 放行（承 §7.5）。
+
+## §8 ce9 受保护文件与五基线哨兵
+
+### §8.1 ce9 五保护文件
+下列文件涉及金融正确性核心（CHARTER §5 A 层），未经主理人显式 carve-out 授权
+禁止修改（STOP-ARCH，见 §4）：
+- src/hermes/risk/guard.py
+- src/hermes/execution/precision.py
+- src/hermes/execution/nt_translate.py
+- src/hermes/execution/nt_submit.py
+- src/hermes/execution/exec_bridge.py
+
+### §8.2 五基线 md5 哨兵
+tests/unit/execution/test_post_only_routing.py::test_ce9 硬编码五文件 md5，任一漂移
+即测试失败，作为"未授权改动"的零漂哨兵。当前基线（承 44.md §6，HEAD d14b6aa）：
+
+| 文件 | md5 |
+|---|---|
+| guard.py | a0b23f0f9e6a1c910b06ddfd22489bf9 |
+| precision.py | bb0308ce6cf0b50f5214e5d9819f2cc8 |
+| nt_translate.py | a9cd0219475a99c6b1ea145d4e45f370 |
+| nt_submit.py | db974054f08f4a15ee3357cd74a565cb |
+| exec_bridge.py | 2a92d362b9b30cdd9d190128fcd1d21d |
+
+授权 carve-out 改动某文件后，须同步迁移其基线 md5（in-place 单行替换）；旧 docs 里
+该文件旧 md5 全部作废，以最新 commit + 本节为准。
