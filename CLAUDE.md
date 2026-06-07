@@ -87,7 +87,7 @@ tests/e2e/         # full stack
   人显式说"yes"或"go"。AI 一旦看到 working tree 干净就自动推进下一个
   任务是禁止的。
 
-> 注:本文件 §6 验证体系 / §12 双轨制 / §13 终审为本会话(2026-06-01)mini 补全;§4 红线(STOP-* 体系)的完整定义、§1~§5/§8 等章节仍待重建(backlog:CLAUDE-REBUILD-FULL)——其内容在一次未入 git 的 CLAUDE.md 版本(曾达 205 行,见 21.md 记 md5 67f2ae97)丢失中遗失。§6(项目宪章层面)另见 CHARTER.md。
+> 注:§1/§4/§5/§8 已于 CLAUDE-REBUILD 重建(2026-06-07);§2/§3(现有 Commands/Environment/Architecture/Key conventions 的正式编号)待整理,内容在位、低优先。§6/§12/§13 为 2026-06-01 mini 补全。项目宪章层面(定位/范围/MVP/路线图/代码标准/退出标准)另见 CHARTER.md。
 
 ## §4 红线 STOP-* 体系
 
