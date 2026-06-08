@@ -1189,3 +1189,283 @@ class TestNewOrderMock:
             await client.aclose()
 
         assert seen["query"]["newClientOrderId"] == ["my-id-123"]
+
+
+# ============================================================================
+# get_account() / get_open_orders() / get_my_trades() — mock transport tests
+# ============================================================================
+
+# --- get_account() -----------------------------------------------------------
+
+class TestGetAccountMock:
+
+    @pytest.mark.asyncio
+    async def test_returns_dict_on_success(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/api/v3/account"
+            return httpx.Response(
+                200, json={"makerCommission": 10, "canTrade": True, "balances": []}
+            )
+
+        client = _build_mock_client(handler)
+        try:
+            result = await client.get_account()
+        finally:
+            await client.aclose()
+
+        assert isinstance(result, dict)
+        assert result["canTrade"] is True
+
+    @pytest.mark.asyncio
+    async def test_signed_injects_timestamp_signature_no_symbol(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = parse_qs(urlparse(str(request.url)).query)
+            return httpx.Response(
+                200, json={"makerCommission": 10, "canTrade": True, "balances": []}
+            )
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_account()
+        finally:
+            await client.aclose()
+
+        q = seen["query"]
+        assert "timestamp" in q
+        assert "signature" in q
+        assert "symbol" not in q
+
+    @pytest.mark.asyncio
+    async def test_error_response_raises_binance_api_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"code": -2014, "msg": "API-key format invalid."})
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(BinanceAPIError) as exc_info:
+                await client.get_account()
+        finally:
+            await client.aclose()
+
+        assert exc_info.value.code == -2014
+        assert exc_info.value.http_status == 401
+
+
+# --- get_open_orders() -------------------------------------------------------
+
+class TestGetOpenOrdersMock:
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_without_symbol(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/api/v3/openOrders"
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            result = await client.get_open_orders()
+        finally:
+            await client.aclose()
+
+        assert isinstance(result, list)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_symbol_sends_no_symbol_param(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = parse_qs(urlparse(str(request.url)).query)
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_open_orders()
+        finally:
+            await client.aclose()
+
+        assert "symbol" not in seen["query"]
+
+    @pytest.mark.asyncio
+    async def test_symbol_uppercased_in_query(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = dict(request.url.params)
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_open_orders(symbol="solusdt")
+        finally:
+            await client.aclose()
+
+        assert seen["query"]["symbol"] == "SOLUSDT"
+
+    @pytest.mark.asyncio
+    async def test_signed_injects_timestamp_and_signature(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = parse_qs(urlparse(str(request.url)).query)
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_open_orders()
+        finally:
+            await client.aclose()
+
+        assert "timestamp" in seen["query"]
+        assert "signature" in seen["query"]
+
+    @pytest.mark.asyncio
+    async def test_error_response_raises_binance_api_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"code": -1121, "msg": "Invalid symbol."})
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(BinanceAPIError) as exc_info:
+                await client.get_open_orders(symbol="BADSYMBOL")
+        finally:
+            await client.aclose()
+
+        assert exc_info.value.code == -1121
+        assert exc_info.value.http_status == 400
+
+
+# --- get_my_trades() ---------------------------------------------------------
+
+_SAMPLE_TRADE = {
+    "id": 12345,
+    "symbol": "SOLUSDT",
+    "orderId": 9876,
+    "price": "100.50",
+    "qty": "1.00",
+    "quoteQty": "100.50",
+    "commission": "0.10050",
+    "commissionAsset": "USDT",
+    "time": 1700000000000,
+    "isBuyer": True,
+    "isMaker": False,
+    "isBestMatch": True,
+}
+
+
+class TestGetMyTradesMock:
+
+    @pytest.mark.asyncio
+    async def test_returns_list_on_success(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/api/v3/myTrades"
+            return httpx.Response(200, json=[_SAMPLE_TRADE])
+
+        client = _build_mock_client(handler)
+        try:
+            result = await client.get_my_trades("SOLUSDT")
+        finally:
+            await client.aclose()
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["id"] == 12345
+
+    @pytest.mark.asyncio
+    async def test_symbol_required_empty_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; symbol validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.get_my_trades("")
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_symbol_uppercased_in_query(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = dict(request.url.params)
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_my_trades("solusdt")
+        finally:
+            await client.aclose()
+
+        assert seen["query"]["symbol"] == "SOLUSDT"
+
+    @pytest.mark.asyncio
+    async def test_signed_injects_timestamp_and_signature(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = parse_qs(urlparse(str(request.url)).query)
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_my_trades("SOLUSDT")
+        finally:
+            await client.aclose()
+
+        assert "timestamp" in seen["query"]
+        assert "signature" in seen["query"]
+
+    @pytest.mark.asyncio
+    async def test_optional_params_sent_when_provided(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["query"] = dict(request.url.params)
+            return httpx.Response(200, json=[])
+
+        client = _build_mock_client(handler)
+        try:
+            await client.get_my_trades(
+                "SOLUSDT",
+                limit=100,
+                start_time_ms=1700000000000,
+                end_time_ms=1700086400000,
+                from_id=99,
+            )
+        finally:
+            await client.aclose()
+
+        assert seen["query"]["limit"] == "100"
+        assert seen["query"]["startTime"] == "1700000000000"
+        assert seen["query"]["endTime"] == "1700086400000"
+        assert seen["query"]["fromId"] == "99"
+
+    @pytest.mark.asyncio
+    async def test_invalid_limit_raises_before_network(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("network hit; limit validation missing")
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(ValueError):
+                await client.get_my_trades("SOLUSDT", limit=2000)
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_error_response_raises_binance_api_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"code": -1121, "msg": "Invalid symbol."})
+
+        client = _build_mock_client(handler)
+        try:
+            with pytest.raises(BinanceAPIError) as exc_info:
+                await client.get_my_trades("BADSYMBOL")
+        finally:
+            await client.aclose()
+
+        assert exc_info.value.code == -1121
+        assert exc_info.value.http_status == 400

@@ -24,7 +24,7 @@ def test_missing_token_raises_validation_error() -> None:
         import os
         env = {k: v for k, v in os.environ.items() if k != "HERMES_TELEGRAM_BOT_TOKEN"}
         with patch.dict("os.environ", env, clear=True), pytest.raises(ValidationError):
-            TelegramConfig()
+            TelegramConfig(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_config_from_env_vars() -> None:

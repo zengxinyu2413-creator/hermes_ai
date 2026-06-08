@@ -369,6 +369,91 @@ class BinanceRestClient:
         assert isinstance(result, dict)
         return result
 
+    async def get_account(self) -> dict[str, Any]:
+        """Fetch account information including balances and commission rates.
+
+        Endpoint: GET /api/v3/account (signed, weight 10)
+
+        Returns:
+            Raw Binance account response dict (makerCommission, takerCommission,
+            canTrade, balances, ...).
+
+        Raises:
+            BinanceAPIError: If Binance rejects the request (e.g. invalid API key).
+        """
+        result = await self._request("GET", "/api/v3/account", signed=True)
+        assert isinstance(result, dict)
+        return result
+
+    async def get_open_orders(
+        self,
+        symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch all open orders, optionally filtered by symbol.
+
+        Endpoint: GET /api/v3/openOrders (signed, weight 3 with symbol, 40 without)
+
+        Args:
+            symbol: Trading pair filter, e.g. "SOLUSDT". If omitted, returns
+                open orders for ALL symbols (higher API weight — use sparingly).
+
+        Returns:
+            List of raw Binance order dicts. Empty list if no open orders.
+
+        Raises:
+            BinanceAPIError: If Binance rejects the request.
+        """
+        params: dict[str, str] | None = None
+        if symbol is not None:
+            params = {"symbol": symbol.upper()}
+        result = await self._request("GET", "/api/v3/openOrders", params=params, signed=True)
+        assert isinstance(result, list)
+        return result
+
+    async def get_my_trades(
+        self,
+        symbol: str,
+        *,
+        limit: int | None = None,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        from_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch trade history for a symbol.
+
+        Endpoint: GET /api/v3/myTrades (signed, weight 10)
+
+        Args:
+            symbol: Trading pair, e.g. "SOLUSDT". Required by Binance.
+            limit: Max trades to return (1-1000). Binance default is 500.
+            start_time_ms: Return trades at or after this Unix ms timestamp.
+            end_time_ms: Return trades at or before this Unix ms timestamp.
+            from_id: Return trades with tradeId >= fromId.
+
+        Returns:
+            List of raw Binance trade dicts. Empty list if no matching trades.
+
+        Raises:
+            ValueError: If symbol is empty or limit is out of range.
+            BinanceAPIError: If Binance rejects the request.
+        """
+        if not symbol:
+            raise ValueError("symbol is required for get_my_trades")
+        params: dict[str, str | int] = {"symbol": symbol.upper()}
+        if limit is not None:
+            if not 1 <= limit <= 1000:
+                raise ValueError(f"limit must be in [1, 1000], got {limit}")
+            params["limit"] = limit
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        if end_time_ms is not None:
+            params["endTime"] = end_time_ms
+        if from_id is not None:
+            params["fromId"] = from_id
+        result = await self._request("GET", "/api/v3/myTrades", params=params, signed=True)
+        assert isinstance(result, list)
+        return result
+
     # --- HTTP request engine ------------------------------------------------
 
     async def _request(
