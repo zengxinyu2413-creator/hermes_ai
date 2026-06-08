@@ -87,6 +87,7 @@ monitor = [
 
 [project.scripts]
 hermes = "hermes.cli:main"
+hermes-monitor = "hermes.monitoring.__main__:main"
 
 # === 工具配置 ===
 [tool.setuptools.packages.find]
