@@ -126,16 +126,15 @@ class V25TrendStrategy(Strategy):  # type: ignore[misc]
         if self._pos is None and self._cd == 0:
             self._try_entry(p, at, ad, vf)
 
-        # save for next bar (mirrors V25's pr = df.iloc[i-1])
-        self._prev_ema20 = self._ema20
-        self._prev_adx = ad
-
     def on_stop(self) -> None:
         pass
 
     # ── indicator updates ─────────────────────────────────────────────────────
 
     def _update_indicators(self, h: float, lo: float, p: float) -> None:
+        # snapshot prev-bar EMA20/ADX BEFORE recompute (V25 pr=df.iloc[i-1]; consumed next bar)
+        self._prev_ema20 = self._ema20
+        self._prev_adx = self._adx
         # EMA (ewm adjust=False → α·p + (1−α)·prev)
         a20, a50, a100 = 2.0 / 21, 2.0 / 51, 2.0 / 101
         self._ema20 = p if self._ema20 is None else a20 * p + (1 - a20) * self._ema20
